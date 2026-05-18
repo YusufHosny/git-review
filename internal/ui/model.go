@@ -110,8 +110,9 @@ type Model struct {
 	lineComments map[int]*review.Comment
 
 	// === Theme ===
-	themeIndex  int
-	activeTheme Theme
+	themeIndex        int
+	activeTheme       Theme
+	themePickerCursor int
 
 	// === Config ===
 	cfg config.Config

@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+
 type OverlayMode int
 
 const (
@@ -13,6 +14,7 @@ const (
 	OverlayCommentInput
 	OverlayConfirm
 	OverlayNotify
+	OverlayThemePicker
 )
 
 func (m Model) renderOverlay() string {
@@ -21,6 +23,8 @@ func (m Model) renderOverlay() string {
 		return m.renderCommentOverlay()
 	case OverlayConfirm:
 		return m.renderConfirmOverlay()
+	case OverlayThemePicker:
+		return m.renderThemePickerOverlay()
 	default:
 		return ""
 	}
@@ -78,6 +82,48 @@ func (m Model) renderConfirmOverlay() string {
 	}
 
 	return OverlayStyle.Copy().Width(maxW).Render(inner)
+}
+
+func (m Model) renderThemePickerOverlay() string {
+	title := OverlayTitle.Render("Select Theme")
+	hint := HelpTextStyle.Render("j/k move · enter apply · esc cancel")
+
+	var rows []string
+	for i, theme := range Themes {
+		isCurrent := i == m.themePickerCursor
+
+		// Color swatches — rendered in each theme's own colors
+		addSwatch := lipgloss.NewStyle().Background(theme.StatusApproved).Render("  ")
+		delSwatch := lipgloss.NewStyle().Background(theme.StatusChanged).Render("  ")
+		accentSwatch := lipgloss.NewStyle().Background(theme.AccentText).Render("  ")
+		bgSwatch := lipgloss.NewStyle().Background(theme.TopBarBg).Foreground(theme.DimText).Render("  ")
+
+		swatches := addSwatch + " " + delSwatch + " " + accentSwatch + " " + bgSwatch
+
+		namePad := 14
+		name := theme.Name
+		if len(name) < namePad {
+			name += strings.Repeat(" ", namePad-len(name))
+		}
+
+		var row string
+		if isCurrent {
+			cursor := lipgloss.NewStyle().Foreground(m.activeTheme.AccentText).Bold(true).Render("▶ ")
+			nameStyled := lipgloss.NewStyle().Foreground(m.activeTheme.BrightText).Bold(true).Render(name)
+			row = cursor + nameStyled + " " + swatches
+		} else {
+			cursor := "  "
+			nameStyled := lipgloss.NewStyle().Foreground(m.activeTheme.NormalText).Render(name)
+			row = cursor + nameStyled + " " + swatches
+		}
+		rows = append(rows, row)
+	}
+
+	inner := lipgloss.JoinVertical(lipgloss.Left,
+		append([]string{title, ""}, append(rows, "", hint)...)...,
+	)
+
+	return OverlayStyle.Copy().Render(inner)
 }
 
 // placeOverlay centers the overlay string on top of the base content.

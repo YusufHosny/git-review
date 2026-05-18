@@ -27,6 +27,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.overlay == OverlayConfirm {
 		return m.updateConfirmOverlay(msg)
 	}
+	if m.overlay == OverlayThemePicker {
+		return m.updateThemePicker(msg)
+	}
 
 	// Handle search mode input
 	if m.searchMode {
@@ -482,14 +485,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.splitView = !m.splitView
 			m.splitOffset = 0
 
-		// === Theme cycling ===
+		// === Theme picker ===
 		case "t":
-			m.themeIndex = (m.themeIndex + 1) % len(Themes)
-			m.activeTheme = Themes[m.themeIndex]
-			InitStyles(m.activeTheme)
-			m.treeDelegate.ActiveTheme = m.activeTheme
-			m.fileList.SetDelegate(m.treeDelegate)
-			go config.SaveTheme(m.activeTheme.Name) //nolint:errcheck
+			m.themePickerCursor = m.themeIndex
+			m.overlay = OverlayThemePicker
 
 		// === fzf jump ===
 		case "F":
@@ -678,6 +677,35 @@ func (m Model) updateConfirmOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay = OverlayNone
 			m.confirmAction = nil
 			return m, nil
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateSizes()
+	}
+	return m, nil
+}
+
+// === Theme picker handler ===
+
+func (m Model) updateThemePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc", "q":
+			m.overlay = OverlayNone
+		case "j", "down":
+			m.themePickerCursor = (m.themePickerCursor + 1) % len(Themes)
+		case "k", "up":
+			m.themePickerCursor = (m.themePickerCursor - 1 + len(Themes)) % len(Themes)
+		case "enter", " ":
+			m.themeIndex = m.themePickerCursor
+			m.activeTheme = Themes[m.themeIndex]
+			InitStyles(m.activeTheme)
+			m.treeDelegate.ActiveTheme = m.activeTheme
+			m.fileList.SetDelegate(m.treeDelegate)
+			m.overlay = OverlayNone
+			go config.SaveTheme(m.activeTheme.Name) //nolint:errcheck
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
