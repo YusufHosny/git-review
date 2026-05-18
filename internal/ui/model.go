@@ -307,10 +307,7 @@ func isDiffContentLine(cleanLine string) bool {
 }
 
 func (m *Model) setYOffset(offset int) {
-	maxOffset := len(m.diffLines) - m.diffViewport.Height
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
+	maxOffset := m.maxScrollOffset()
 	if offset > maxOffset {
 		offset = maxOffset
 	}
@@ -318,6 +315,100 @@ func (m *Model) setYOffset(offset int) {
 		offset = 0
 	}
 	m.diffViewport.YOffset = offset
+}
+
+// codeMaxW returns the maximum code column width given the current viewport width.
+// Must match the calculation in renderUnifiedDiff.
+func (m *Model) codeMaxW() int {
+	maxLineWidth := m.diffViewport.Width - 9
+	if maxLineWidth < 1 {
+		maxLineWidth = 1
+	}
+	w := maxLineWidth - 4
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// visualRowsForLine returns the number of terminal rows that logical line i
+// occupies when rendered (wrapping-aware, comment ghost rows included).
+// Hidden metadata lines return 0.
+func (m *Model) visualRowsForLine(i int) int {
+	if i < 0 || i >= len(m.diffLines) {
+		return 0
+	}
+	cleanLine := stripAnsi(m.diffLines[i])
+	if isDiffMetadata(cleanLine) {
+		if strings.HasPrefix(cleanLine, "@@") {
+			return 1
+		}
+		return 0
+	}
+	codeContent := cleanLine
+	if len(codeContent) > 0 {
+		codeContent = codeContent[1:]
+	}
+	codeMaxW := m.codeMaxW()
+	w := len([]rune(codeContent))
+	var rows int
+	if w == 0 || codeMaxW == 0 {
+		rows = 1
+	} else {
+		rows = (w + codeMaxW - 1) / codeMaxW
+	}
+	// Inline comment ghost adds one extra row.
+	if m.cfg.UI.ShowCommentsInline {
+		if _, hasComment := m.lineComments[i]; hasComment {
+			rows++
+		}
+	}
+	return rows
+}
+
+// diffContentHeight returns the effective number of visual rows available for
+// diff content, accounting for the "changed since approval" header row.
+func (m *Model) diffContentHeight() int {
+	h := m.diffViewport.Height
+	if m.computedStatuses[m.selectedPath] == review.StatusChanged && h > 0 {
+		h--
+	}
+	return h
+}
+
+// maxScrollOffset computes the largest YOffset at which the viewport is still
+// fully filled. It walks backwards through diffLines counting visual rows
+// until it has accumulated enough to fill the effective content height.
+func (m *Model) maxScrollOffset() int {
+	h := m.diffContentHeight()
+	if h <= 0 || len(m.diffLines) == 0 {
+		return 0
+	}
+	needed := h
+	for i := len(m.diffLines) - 1; i >= 0; i-- {
+		needed -= m.visualRowsForLine(i)
+		if needed <= 0 {
+			return i
+		}
+	}
+	return 0
+}
+
+// offsetToShowCursorAtBottom returns the smallest YOffset at which diffCursor
+// is still within the viewport (cursor lands on the last visible row).
+func (m *Model) offsetToShowCursorAtBottom() int {
+	h := m.diffContentHeight()
+	if h <= 0 {
+		return m.diffCursor
+	}
+	needed := h
+	for i := m.diffCursor; i >= 0; i-- {
+		needed -= m.visualRowsForLine(i)
+		if needed <= 0 {
+			return i
+		}
+	}
+	return 0
 }
 
 func (m *Model) snapCursor(idx int, dir int) int {
@@ -355,14 +446,31 @@ func (m *Model) snapCursor(idx int, dir int) int {
 func (m *Model) handleScrolling() {
 	if m.diffCursor < m.diffViewport.YOffset {
 		m.setYOffset(m.diffCursor)
-	} else if m.diffCursor >= m.diffViewport.YOffset+m.diffViewport.Height {
-		m.setYOffset(m.diffCursor - m.diffViewport.Height + 1)
+		return
+	}
+	// Count visual rows from YOffset through diffCursor.
+	// If they exceed the effective content height the cursor is off-screen below.
+	h := m.diffContentHeight()
+	visualRows := 0
+	for i := m.diffViewport.YOffset; i <= m.diffCursor; i++ {
+		visualRows += m.visualRowsForLine(i)
+	}
+	if visualRows > h {
+		m.setYOffset(m.offsetToShowCursorAtBottom())
 	}
 }
 
 func (m *Model) centerDiffCursor() {
-	targetOffset := m.diffCursor - (m.diffViewport.Height / 2)
-	m.setYOffset(targetOffset)
+	half := m.diffContentHeight() / 2
+	needed := half
+	for i := m.diffCursor; i >= 0; i-- {
+		needed -= m.visualRowsForLine(i)
+		if needed <= 0 {
+			m.setYOffset(i)
+			return
+		}
+	}
+	m.setYOffset(0)
 }
 
 func (m *Model) updateSizes() {

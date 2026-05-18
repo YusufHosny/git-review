@@ -78,14 +78,20 @@ func (m Model) View() string {
 func (m Model) renderUnifiedDiff(contentHeight int) string {
 	var renderedDiff strings.Builder
 
-	viewportHeight := contentHeight
-	start := m.diffViewport.YOffset
-	end := start + viewportHeight
-	if end > len(m.diffLines) {
-		end = len(m.diffLines)
+	// Use the pane's inner height so the renderer fills exactly what the pane shows.
+	// Reserve 1 row when the "changed since approval" header is shown.
+	showsHeader := m.computedStatuses[m.selectedPath] == review.StatusChanged
+	viewportHeight := m.diffViewport.Height
+	if showsHeader && viewportHeight > 0 {
+		viewportHeight--
 	}
+	start := m.diffViewport.YOffset
 
-	maxLineWidth := m.diffViewport.Width - 7
+	// wrapAt = Width(diffViewport.Width-2) - 2*Padding(0,1) = diffViewport.Width-4.
+	// lineNum(5) + gutter(4) = 9 chars overhead for numbered lines.
+	// So codeMaxW = diffViewport.Width-4-9 = diffViewport.Width-13.
+	// maxLineWidth = codeMaxW+4 (gutter) = diffViewport.Width-9.
+	maxLineWidth := m.diffViewport.Width - 9
 	if maxLineWidth < 1 {
 		maxLineWidth = 1
 	}
@@ -111,7 +117,15 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 		}
 	}
 
-	for i := start; i < end; i++ {
+	codeMaxW := maxLineWidth - 4 // 4-char gutter: "+ │ "
+	if codeMaxW < 1 {
+		codeMaxW = 1
+	}
+
+	contGutter := DiffCtxGutter.Render("  │ ")
+
+	visualRows := 0
+	for i := start; i < len(m.diffLines) && visualRows < viewportHeight; i++ {
 		rawLine := m.diffLines[i]
 		cleanLine := stripAnsi(rawLine)
 
@@ -127,9 +141,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 					Background(m.activeTheme.TopBarBg)
 				line := hunkStyle.Render(ansi.Truncate(cleanLine, maxLineWidth+6, ""))
 				renderedDiff.WriteString(line + "\n")
-			}
-			if end < len(m.diffLines) {
-				end++
+				visualRows++
 			}
 			continue
 		}
@@ -208,103 +220,125 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 		}
 
 		lineNumRendered := ""
+		lineNumPad := ""
 		if numStr != "" {
 			lineNumRendered = LineNumberStyle.Render(numStr)
+			lineNumPad = strings.Repeat(" ", lipgloss.Width(lineNumRendered))
 		}
 
-		codeMaxW := maxLineWidth - 4 // 4-char gutter: "+ │ "
+		// Wrap code content into visual rows.
+		codeRows := wrapCodeRows(codeContent, codeMaxW)
 
-		var line string
-		if isCursor {
-			// Cursor: single full-width block using direct ANSI for clean background.
-			var bgColor, fgColor lipgloss.Color
-			indicator := " "
-			if isAdd {
-				bgColor, fgColor = m.activeTheme.CursorAddBg, m.activeTheme.CursorAddFg
-				indicator = "+"
-			} else if isDel {
-				bgColor, fgColor = m.activeTheme.CursorDelBg, m.activeTheme.CursorDelFg
-				indicator = "-"
-			} else {
-				bgColor, fgColor = m.activeTheme.CursorCtxBg, m.activeTheme.CursorCtxFg
-			}
-			bg := ansiColorBg(bgColor)
-			fg := ansiColorFg(fgColor)
-			truncCode := ansi.Truncate(codeContent, codeMaxW, "")
-			pad := strings.Repeat(" ", max(0, codeMaxW-lipgloss.Width(truncCode)))
-			line = bg + fg + "\x1b[1m" + indicator + " " + separator + " \x1b[22m" +
-				truncCode + pad + "\x1b[0m"
-
-		} else if isAdd || isDel {
-			// Add/del: full-width colored background with syntax highlighting.
-			// We re-inject the diff background after every chroma reset so the
-			// background stays consistent across syntax tokens (delta-style).
-			var bgColor lipgloss.Color
-			var gutterFg lipgloss.Color
-			indicator := "+"
-			if isDel {
-				bgColor = m.activeTheme.DelBg
-				gutterFg = m.activeTheme.GutterDel
-				indicator = "-"
-			} else {
-				bgColor = m.activeTheme.AddBg
-				gutterFg = m.activeTheme.GutterAdd
-			}
-			bg := ansiColorBg(bgColor)
-
-			// Gutter: bold indicator fg on diff bg, then reset fg/bold (bg stays).
-			gutter := bg + "\x1b[1m" + ansiColorFg(gutterFg) +
-				indicator + " " + separator + " \x1b[22m\x1b[39m"
-
-			// Code: syntax highlight with bg preserved across resets.
-			var code string
-			if isSearchMatch && m.searchQuery != "" {
-				code = bg + SearchMatchStyle.Render(ansi.Truncate(codeContent, codeMaxW, ""))
-			} else if i < len(m.diffHighlighted) {
-				hl := bgAnsiRe.ReplaceAllString(m.diffHighlighted[i], "")
-				hl = ansi.Truncate(hl, codeMaxW, "")
-				code = injectBgAfterResets(hl, bg)
-			} else {
-				code = bg + ansi.Truncate(codeContent, codeMaxW, "")
-			}
-
-			truncPlain := ansi.Truncate(codeContent, codeMaxW, "")
-			pad := strings.Repeat(" ", max(0, codeMaxW-lipgloss.Width(truncPlain)))
-			line = gutter + code + bg + pad + "\x1b[0m"
-
-		} else {
-			// Context line: syntax highlighting, no background.
-			var gutterStr string
-			if isAdd {
-				gutterStr = DiffAddGutter.Render("+ " + separator + " ")
-			} else if isDel {
-				gutterStr = DiffDelGutter.Render("- " + separator + " ")
-			} else {
-				gutterStr = DiffCtxGutter.Render("  " + separator + " ")
-			}
-			var hlCode string
-			if isSearchMatch && m.searchQuery != "" {
-				hlCode = SearchMatchStyle.Render(ansi.Truncate(codeContent, codeMaxW, ""))
-			} else if i < len(m.diffHighlighted) {
-				hlCode = bgAnsiRe.ReplaceAllString(m.diffHighlighted[i], "")
-				hlCode = ansi.Truncate(hlCode, codeMaxW, "")
-			} else {
-				hlCode = ansi.Truncate(codeContent, codeMaxW, "")
-			}
-			line = gutterStr + hlCode
+		// Highlighted text (first row only): truncate to the same visual width as
+		// codeRows[0] so the two agree on where the first row ends.
+		// Continuation rows use plain text to avoid ANSI sequences confusing Hardwrap.
+		var hlFirstRow string
+		if !isCursor && i < len(m.diffHighlighted) {
+			hl := bgAnsiRe.ReplaceAllString(m.diffHighlighted[i], "")
+			hlFirstRow = ansi.Truncate(hl, lipgloss.Width(codeRows[0]), "")
 		}
 
-		renderedDiff.WriteString(lineNumRendered + line + "\n")
+		for rowIdx, rowContent := range codeRows {
+			if visualRows >= viewportHeight {
+				break
+			}
+			isFirstRow := rowIdx == 0
+
+			var line string
+			if isCursor {
+				var bgColor, fgColor lipgloss.Color
+				indicator := " "
+				if isAdd {
+					bgColor, fgColor = m.activeTheme.CursorAddBg, m.activeTheme.CursorAddFg
+					if isFirstRow {
+						indicator = "+"
+					}
+				} else if isDel {
+					bgColor, fgColor = m.activeTheme.CursorDelBg, m.activeTheme.CursorDelFg
+					if isFirstRow {
+						indicator = "-"
+					}
+				} else {
+					bgColor, fgColor = m.activeTheme.CursorCtxBg, m.activeTheme.CursorCtxFg
+				}
+				bg := ansiColorBg(bgColor)
+				fg := ansiColorFg(fgColor)
+				pad := strings.Repeat(" ", max(0, codeMaxW-lipgloss.Width(rowContent)))
+				gutterPart := indicator + " " + separator + " "
+				if !isFirstRow {
+					gutterPart = "  " + separator + " "
+				}
+				line = bg + fg + "\x1b[1m" + gutterPart + "\x1b[22m" +
+					rowContent + pad + "\x1b[0m"
+
+			} else if isAdd || isDel {
+				var bgColor lipgloss.Color
+				var gutterFg lipgloss.Color
+				indicator := "+"
+				if isDel {
+					bgColor = m.activeTheme.DelBg
+					gutterFg = m.activeTheme.GutterDel
+					indicator = "-"
+				} else {
+					bgColor = m.activeTheme.AddBg
+					gutterFg = m.activeTheme.GutterAdd
+				}
+				bg := ansiColorBg(bgColor)
+
+				var gutterStr string
+				if isFirstRow {
+					gutterStr = bg + "\x1b[1m" + ansiColorFg(gutterFg) +
+						indicator + " " + separator + " \x1b[22m\x1b[39m"
+				} else {
+					gutterStr = bg + "  " + separator + " "
+				}
+
+				var code string
+				if isSearchMatch && m.searchQuery != "" && isFirstRow {
+					code = bg + SearchMatchStyle.Render(rowContent)
+				} else if isFirstRow && hlFirstRow != "" {
+					code = injectBgAfterResets(hlFirstRow, bg)
+				} else {
+					code = bg + rowContent
+				}
+
+				pad := strings.Repeat(" ", max(0, codeMaxW-lipgloss.Width(rowContent)))
+				line = gutterStr + code + bg + pad + "\x1b[0m"
+
+			} else {
+				// Context line: syntax highlighting, no background.
+				var gutterStr string
+				if isFirstRow {
+					gutterStr = DiffCtxGutter.Render("  " + separator + " ")
+				} else {
+					gutterStr = contGutter
+				}
+				var hlCode string
+				if isSearchMatch && m.searchQuery != "" && isFirstRow {
+					hlCode = SearchMatchStyle.Render(rowContent)
+				} else if isFirstRow && hlFirstRow != "" {
+					hlCode = hlFirstRow
+				} else {
+					hlCode = rowContent
+				}
+				line = gutterStr + hlCode
+			}
+
+			if isFirstRow {
+				renderedDiff.WriteString(lineNumRendered + line + "\n")
+			} else {
+				renderedDiff.WriteString(lineNumPad + line + "\n")
+			}
+			visualRows++
+		}
 
 		// Render comment ghost line if there's a comment on this diff line
-		if c, ok := m.lineComments[i]; ok && m.cfg.UI.ShowCommentsInline {
+		if c, ok := m.lineComments[i]; ok && m.cfg.UI.ShowCommentsInline && visualRows < viewportHeight {
 			commentPrefix := "     ▶ "
 			commentText := trimLine(c.Body, maxLineWidth-len(commentPrefix)-2)
 			ghost := CommentStyle.Render(commentPrefix + commentText)
 			renderedDiff.WriteString(ghost + "\n")
-			if end < len(m.diffLines) {
-				end++
-			}
+			visualRows++
 		}
 	}
 
@@ -317,7 +351,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 			Render(" ↑ showing new changes since approval — press 'a' to approve again")
 	}
 
-	diffContentStr := "\n" + strings.TrimRight(renderedDiff.String(), "\n")
+	diffContentStr := strings.TrimRight(renderedDiff.String(), "\n")
 	if headerStr != "" {
 		diffContentStr = headerStr + "\n" + diffContentStr
 	}
@@ -526,6 +560,20 @@ func injectBgAfterResets(s, bgAnsi string) string {
 	s = strings.ReplaceAll(s, "\x1b[0m", restore)
 	s = strings.ReplaceAll(s, "\x1b[m", restore)
 	return bgAnsi + s
+}
+
+// wrapCodeRows splits content into visual rows of at most width columns,
+// preserving ANSI escape codes and leading whitespace (indentation).
+func wrapCodeRows(content string, width int) []string {
+	if width <= 0 || lipgloss.Width(content) <= width {
+		return []string{content}
+	}
+	wrapped := ansi.Hardwrap(content, width, true)
+	rows := strings.Split(wrapped, "\n")
+	if len(rows) == 0 {
+		return []string{content}
+	}
+	return rows
 }
 
 func (m Model) renderEmptyState(w, h int) string {

@@ -379,7 +379,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.diffCursor = m.snapCursor(len(m.diffLines)-1, -1)
 				}
-				m.setYOffset(m.diffCursor - m.diffViewport.Height + 1)
+				m.setYOffset(m.offsetToShowCursorAtBottom())
 				m.inputBuffer = ""
 			}
 
@@ -434,11 +434,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.overlay = OverlayConfirm
 
-		// === Navigate unreviewed files ===
+		// === Search navigation (when a query is active) / next unreviewed file ===
 		case "n":
-			idx := m.findNextUnreviewedFile(1)
-			if idx >= 0 {
-				m.fileList.Select(idx)
+			if m.searchQuery != "" && len(m.searchMatches) > 0 {
+				m.searchCursor = (m.searchCursor + 1) % len(m.searchMatches)
+				m.diffCursor = m.searchMatches[m.searchCursor]
+				m.handleScrolling()
+			} else {
+				idx := m.findNextUnreviewedFile(1)
+				if idx >= 0 {
+					m.fileList.Select(idx)
+				}
+			}
+
+		case "N":
+			if m.searchQuery != "" && len(m.searchMatches) > 0 {
+				m.searchCursor = (m.searchCursor - 1 + len(m.searchMatches)) % len(m.searchMatches)
+				m.diffCursor = m.searchMatches[m.searchCursor]
+				m.handleScrolling()
 			}
 
 		case "p":
@@ -726,23 +739,17 @@ func (m Model) updateSearchMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchQuery = ""
 			m.searchMatches = nil
 			m.searchCursor = 0
+			m.searchInput.Reset()
 			return m, nil
 		case "enter":
-			// Exit input mode but keep matches
+			// Confirm search: exit input mode, keep matches, jump to first.
 			m.searchMode = false
-			return m, nil
-		case "n":
 			if len(m.searchMatches) > 0 {
-				m.searchCursor = (m.searchCursor + 1) % len(m.searchMatches)
 				m.diffCursor = m.searchMatches[m.searchCursor]
 				m.handleScrolling()
-			}
-			return m, nil
-		case "N":
-			if len(m.searchMatches) > 0 {
-				m.searchCursor = (m.searchCursor - 1 + len(m.searchMatches)) % len(m.searchMatches)
-				m.diffCursor = m.searchMatches[m.searchCursor]
-				m.handleScrolling()
+			} else if m.searchQuery != "" {
+				m.statusNotify = "Pattern not found: " + m.searchQuery
+				return m, clearNotifyCmd()
 			}
 			return m, nil
 		}
@@ -774,17 +781,14 @@ func (m *Model) rebuildSearchMatches() {
 			m.searchMatches = append(m.searchMatches, i)
 		}
 	}
+	// Pre-position searchCursor at the nearest match to current cursor,
+	// but don't move diffCursor — the user hasn't pressed enter yet.
 	m.searchCursor = 0
-	if len(m.searchMatches) > 0 {
-		// Jump to first match after current cursor
-		for i, mi := range m.searchMatches {
-			if mi >= m.diffCursor {
-				m.searchCursor = i
-				break
-			}
+	for i, mi := range m.searchMatches {
+		if mi >= m.diffCursor {
+			m.searchCursor = i
+			break
 		}
-		m.diffCursor = m.searchMatches[m.searchCursor]
-		m.handleScrolling()
 	}
 }
 
