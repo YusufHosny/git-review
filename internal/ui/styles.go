@@ -77,8 +77,8 @@ var Themes = []Theme{
 
 var nordTheme = Theme{
 	Name:          "dark",
-	AddBg:         "#1A251E",
-	DelBg:         "#2D1A1A",
+	AddBg:         "#1e3a28",
+	DelBg:         "#3a1e1e",
 	CursorAddBg:   "#A3E4D7",
 	CursorDelBg:   "#F5B7B1",
 	CursorCtxBg:   "#434C5E",
@@ -115,8 +115,8 @@ var nordTheme = Theme{
 
 var draculaTheme = Theme{
 	Name:          "dracula",
-	AddBg:         "#1a2a1f",
-	DelBg:         "#2a1a1f",
+	AddBg:         "#1d3829",
+	DelBg:         "#3a1d28",
 	CursorAddBg:   "#50fa7b",
 	CursorDelBg:   "#ff5555",
 	CursorCtxBg:   "#44475a",
@@ -153,8 +153,8 @@ var draculaTheme = Theme{
 
 var catppuccinTheme = Theme{
 	Name:          "catppuccin",
-	AddBg:         "#1a2420",
-	DelBg:         "#2a1a1e",
+	AddBg:         "#1e3a2c",
+	DelBg:         "#3a1e28",
 	CursorAddBg:   "#a6e3a1",
 	CursorDelBg:   "#f38ba8",
 	CursorCtxBg:   "#45475a",
@@ -191,8 +191,8 @@ var catppuccinTheme = Theme{
 
 var gruvboxTheme = Theme{
 	Name:          "gruvbox",
-	AddBg:         "#1d2b1f",
-	DelBg:         "#2b1d1d",
+	AddBg:         "#1f3322",
+	DelBg:         "#332222",
 	CursorAddBg:   "#b8bb26",
 	CursorDelBg:   "#fb4934",
 	CursorCtxBg:   "#504945",
@@ -229,8 +229,8 @@ var gruvboxTheme = Theme{
 
 var tokyoNightTheme = Theme{
 	Name:           "tokyo-night",
-	AddBg:          "#1a2a1f",
-	DelBg:          "#2a1825",
+	AddBg:          "#1a3328",
+	DelBg:          "#331a26",
 	CursorAddBg:    "#9ece6a",
 	CursorDelBg:    "#f7768e",
 	CursorCtxBg:    "#283457",
@@ -267,8 +267,8 @@ var tokyoNightTheme = Theme{
 
 var rosePineTheme = Theme{
 	Name:           "rose-pine",
-	AddBg:          "#1a2226",
-	DelBg:          "#261a22",
+	AddBg:          "#1a2e2a",
+	DelBg:          "#2e1a24",
 	CursorAddBg:    "#31748f",
 	CursorDelBg:    "#eb6f92",
 	CursorCtxBg:    "#26233a",
@@ -305,8 +305,8 @@ var rosePineTheme = Theme{
 
 var oneDarkTheme = Theme{
 	Name:           "one-dark",
-	AddBg:          "#1e2a1e",
-	DelBg:          "#2a1e1e",
+	AddBg:          "#1e3328",
+	DelBg:          "#33201e",
 	CursorAddBg:    "#98c379",
 	CursorDelBg:    "#e06c75",
 	CursorCtxBg:    "#3e4451",
@@ -343,8 +343,8 @@ var oneDarkTheme = Theme{
 
 var solarizedTheme = Theme{
 	Name:           "solarized",
-	AddBg:          "#002b1f",
-	DelBg:          "#2b0a00",
+	AddBg:          "#003322",
+	DelBg:          "#2d1200",
 	CursorAddBg:    "#859900",
 	CursorDelBg:    "#dc322f",
 	CursorCtxBg:    "#073642",
@@ -381,8 +381,8 @@ var solarizedTheme = Theme{
 
 var lightTheme = Theme{
 	Name:          "light",
-	AddBg:         "#e6f4ea",
-	DelBg:         "#fce8e6",
+	AddBg:         "#d4efda",
+	DelBg:         "#f5d0cc",
 	CursorAddBg:   "#137333",
 	CursorDelBg:   "#a50e0e",
 	CursorCtxBg:   "#dadce0",
@@ -507,7 +507,7 @@ func InitStyles(t Theme) {
 		PaddingLeft(1).
 		PaddingRight(1)
 
-	DirectoryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
+	DirectoryStyle = lipgloss.NewStyle().Foreground(t.AccentText2)
 	FileStyle = lipgloss.NewStyle().Foreground(t.NormalText)
 
 	DiffStyle = lipgloss.NewStyle().Padding(0, 0)

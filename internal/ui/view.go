@@ -182,15 +182,6 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 			separator = "┃"
 		}
 
-		var gutterStr string
-		if isAdd {
-			gutterStr = DiffAddGutter.Render("+ " + separator + " ")
-		} else if isDel {
-			gutterStr = DiffDelGutter.Render("- " + separator + " ")
-		} else {
-			gutterStr = DiffCtxGutter.Render("  " + separator + " ")
-		}
-
 		// Line number
 		var numStr string
 		switch lineNumMode {
@@ -199,7 +190,6 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 				numStr = fmt.Sprintf("%d", realLineNo)
 			}
 		case "hybrid":
-			// Cursor line: real file line; other lines: distance from cursor.
 			if isCursor {
 				if realLineNo > 0 {
 					numStr = fmt.Sprintf("%d", realLineNo)
@@ -222,42 +212,85 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 			lineNumRendered = LineNumberStyle.Render(numStr)
 		}
 
+		codeMaxW := maxLineWidth - 4 // 4-char gutter: "+ │ "
+
 		var line string
 		if isCursor {
-			fullStr := gutterStr + ansi.Truncate(codeContent, maxLineWidth-4, "")
-			visibleLen := lipgloss.Width(fullStr)
-			padLen := maxLineWidth - visibleLen
-			if padLen > 0 {
-				fullStr += strings.Repeat(" ", padLen)
-			}
+			// Cursor: single full-width block using direct ANSI for clean background.
+			var bgColor, fgColor lipgloss.Color
+			indicator := " "
 			if isAdd {
-				line = CursorAddStyle.Copy().Width(maxLineWidth).Render(fullStr)
+				bgColor, fgColor = m.activeTheme.CursorAddBg, m.activeTheme.CursorAddFg
+				indicator = "+"
 			} else if isDel {
-				line = CursorDelStyle.Copy().Width(maxLineWidth).Render(fullStr)
+				bgColor, fgColor = m.activeTheme.CursorDelBg, m.activeTheme.CursorDelFg
+				indicator = "-"
 			} else {
-				line = CursorNormalStyle.Copy().Width(maxLineWidth).Render(fullStr)
+				bgColor, fgColor = m.activeTheme.CursorCtxBg, m.activeTheme.CursorCtxFg
 			}
-		} else {
-			var hlCode string
+			bg := ansiColorBg(bgColor)
+			fg := ansiColorFg(fgColor)
+			truncCode := ansi.Truncate(codeContent, codeMaxW, "")
+			pad := strings.Repeat(" ", max(0, codeMaxW-lipgloss.Width(truncCode)))
+			line = bg + fg + "\x1b[1m" + indicator + " " + separator + " \x1b[22m" +
+				truncCode + pad + "\x1b[0m"
 
-			if i < len(m.diffHighlighted) {
-				hlCode = m.diffHighlighted[i]
-				hlCode = bgAnsiRe.ReplaceAllString(hlCode, "")
+		} else if isAdd || isDel {
+			// Add/del: full-width colored background with syntax highlighting.
+			// We re-inject the diff background after every chroma reset so the
+			// background stays consistent across syntax tokens (delta-style).
+			var bgColor lipgloss.Color
+			var gutterFg lipgloss.Color
+			indicator := "+"
+			if isDel {
+				bgColor = m.activeTheme.DelBg
+				gutterFg = m.activeTheme.GutterDel
+				indicator = "-"
 			} else {
-				hlCode = codeContent
+				bgColor = m.activeTheme.AddBg
+				gutterFg = m.activeTheme.GutterAdd
 			}
+			bg := ansiColorBg(bgColor)
 
-			hlCode = ansi.Truncate(hlCode, maxLineWidth-4, "")
+			// Gutter: bold indicator fg on diff bg, then reset fg/bold (bg stays).
+			gutter := bg + "\x1b[1m" + ansiColorFg(gutterFg) +
+				indicator + " " + separator + " \x1b[22m\x1b[39m"
 
+			// Code: syntax highlight with bg preserved across resets.
+			var code string
 			if isSearchMatch && m.searchQuery != "" {
-				hlCode = SearchMatchStyle.Render(codeContent)
-				hlCode = ansi.Truncate(hlCode, maxLineWidth-4, "")
-			} else if isAdd {
-				hlCode = DiffAddLineStyle.Render(hlCode)
-			} else if isDel {
-				hlCode = DiffDelLineStyle.Render(hlCode)
+				code = bg + SearchMatchStyle.Render(ansi.Truncate(codeContent, codeMaxW, ""))
+			} else if i < len(m.diffHighlighted) {
+				hl := bgAnsiRe.ReplaceAllString(m.diffHighlighted[i], "")
+				hl = ansi.Truncate(hl, codeMaxW, "")
+				code = injectBgAfterResets(hl, bg)
+			} else {
+				code = bg + ansi.Truncate(codeContent, codeMaxW, "")
 			}
 
+			truncPlain := ansi.Truncate(codeContent, codeMaxW, "")
+			pad := strings.Repeat(" ", max(0, codeMaxW-lipgloss.Width(truncPlain)))
+			line = gutter + code + bg + pad + "\x1b[0m"
+
+		} else {
+			// Context line: syntax highlighting, no background.
+			var gutterStr string
+			if isAdd {
+				gutterStr = DiffAddGutter.Render("+ " + separator + " ")
+			} else if isDel {
+				gutterStr = DiffDelGutter.Render("- " + separator + " ")
+			} else {
+				gutterStr = DiffCtxGutter.Render("  " + separator + " ")
+			}
+			var hlCode string
+			if isSearchMatch && m.searchQuery != "" {
+				hlCode = SearchMatchStyle.Render(ansi.Truncate(codeContent, codeMaxW, ""))
+			} else if i < len(m.diffHighlighted) {
+				hlCode = bgAnsiRe.ReplaceAllString(m.diffHighlighted[i], "")
+				hlCode = ansi.Truncate(hlCode, codeMaxW, "")
+			} else {
+				hlCode = ansi.Truncate(codeContent, codeMaxW, "")
+			}
 			line = gutterStr + hlCode
 		}
 
@@ -456,6 +489,39 @@ func (m Model) renderHelpDrawer() string {
 			col1, spacer, col2, spacer, col3, spacer, col4, spacer, col5,
 		),
 	)
+}
+
+// ansiColorBg converts a #RRGGBB lipgloss color to an ANSI 24-bit background escape.
+func ansiColorBg(c lipgloss.Color) string {
+	h := string(c)
+	if len(h) == 7 && h[0] == '#' {
+		r, _ := strconv.ParseInt(h[1:3], 16, 64)
+		g, _ := strconv.ParseInt(h[3:5], 16, 64)
+		b, _ := strconv.ParseInt(h[5:7], 16, 64)
+		return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+	}
+	return ""
+}
+
+// ansiColorFg converts a #RRGGBB lipgloss color to an ANSI 24-bit foreground escape.
+func ansiColorFg(c lipgloss.Color) string {
+	h := string(c)
+	if len(h) == 7 && h[0] == '#' {
+		r, _ := strconv.ParseInt(h[1:3], 16, 64)
+		g, _ := strconv.ParseInt(h[3:5], 16, 64)
+		b, _ := strconv.ParseInt(h[5:7], 16, 64)
+		return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
+	}
+	return ""
+}
+
+// injectBgAfterResets re-applies bgAnsi after every ANSI reset sequence so that
+// a background color persists through chroma's per-token reset codes.
+func injectBgAfterResets(s, bgAnsi string) string {
+	restore := "\x1b[39m\x1b[22m" + bgAnsi
+	s = strings.ReplaceAll(s, "\x1b[0m", restore)
+	s = strings.ReplaceAll(s, "\x1b[m", restore)
+	return bgAnsi + s
 }
 
 func (m Model) renderEmptyState(w, h int) string {
