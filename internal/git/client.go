@@ -263,9 +263,10 @@ func (c *Client) DiffStatsByFile(from, to string) (map[string][2]int, error) {
 	return result, nil
 }
 
-// HasChangedSince returns true if the file has any diff between commitSHA and HEAD.
+// HasChangedSince returns true if the file differs from commitSHA in the working tree.
+// Compares against the working tree (not ..HEAD) so uncommitted edits also trigger !.
 func (c *Client) HasChangedSince(commitSHA, path string) bool {
-	out, err := c.gitCmd("diff", "--name-only", commitSHA+"..HEAD", "--", path).Output()
+	out, err := c.gitCmd("diff", "--name-only", commitSHA, "--", path).Output()
 	if err != nil {
 		return false
 	}

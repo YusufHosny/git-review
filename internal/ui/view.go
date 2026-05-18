@@ -9,8 +9,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/yusuf/git-review/internal/review"
-	"github.com/yusuf/git-review/internal/tree"
+	"github.com/YusufHosny/git-review/internal/review"
+	"github.com/YusufHosny/git-review/internal/tree"
 )
 
 var hunkStartRe = regexp.MustCompile(`^@@ \-\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
@@ -339,46 +339,50 @@ func (m Model) renderTopBar() string {
 	info := fmt.Sprintf(" %s  %s → %s", m.repoName, m.currentBranch, m.rangeLabel)
 	leftSide := TopInfoStyle.Render(info)
 
+	sep := TopInfoStyle.Render(" · ")
+
 	// Stats counts
 	approved, changed, _, total := m.reviewSummary()
 	reviewInfo := ""
 	if total > 0 {
-		reviewInfo = fmt.Sprintf(" ✓%d !%d ○%d/%d", approved, changed, total-approved-changed, total)
+		reviewInfo = sep + TopInfoStyle.Render(fmt.Sprintf("✓%d  !%d  ○%d/%d", approved, changed, total-approved-changed, total))
 	}
 
 	statsStr := ""
 	if m.statsAdded > 0 || m.statsDeleted > 0 {
-		statsStr = TopStatsAddedStyle.Render(fmt.Sprintf("+%d", m.statsAdded)) +
+		statsStr = sep +
+			TopStatsAddedStyle.Render(fmt.Sprintf("+%d", m.statsAdded)) +
 			TopStatsDeletedStyle.Render(fmt.Sprintf("-%d", m.statsDeleted))
 	}
 
-	themeLabel := StatusKeyStyle.Render("[" + m.activeTheme.Name + "]")
+	themeLabel := sep + StatusKeyStyle.Render("["+m.activeTheme.Name+"]")
 
 	// Right: current file + file stats
 	rightSide := ""
 	if sel, ok := m.fileList.SelectedItem().(tree.TreeItem); ok && !sel.IsDir {
 		fileStats := ""
 		if fs, ok := m.fileStats[sel.FullPath]; ok {
-			fileStats = fmt.Sprintf(" +%d -%d", fs[0], fs[1])
+			fileStats = fmt.Sprintf("  +%d -%d", fs[0], fs[1])
 		}
 
 		status := m.computedStatuses[sel.FullPath]
 		var statusLabel string
 		switch status {
 		case review.StatusApproved:
-			statusLabel = StatusApprovedStyle.Render("[APPROVED]")
+			statusLabel = "  " + StatusApprovedStyle.Render("[APPROVED]")
 		case review.StatusChanged:
-			statusLabel = StatusChangedStyle.Render("[CHANGED]")
+			statusLabel = "  " + StatusChangedStyle.Render("[CHANGED]")
 		case review.StatusViewed:
-			statusLabel = StatusViewedStyle.Render("[VIEWED]")
+			statusLabel = "  " + StatusViewedStyle.Render("[VIEWED]")
 		}
 
-		maxPathW := m.width - lipgloss.Width(leftSide) - lipgloss.Width(statsStr) - lipgloss.Width(reviewInfo) - lipgloss.Width(themeLabel) - 10
+		leftW := lipgloss.Width(leftSide) + lipgloss.Width(statsStr) + lipgloss.Width(reviewInfo) + lipgloss.Width(themeLabel)
+		maxPathW := m.width - leftW - lipgloss.Width(fileStats) - lipgloss.Width(statusLabel) - 6
 		if maxPathW < 10 {
 			maxPathW = 10
 		}
 		truncPath := ansi.Truncate(sel.FullPath, maxPathW, "…")
-		rightSide = truncPath + fileStats + " " + statusLabel
+		rightSide = truncPath + fileStats + statusLabel
 	}
 
 	availWidth := m.width - lipgloss.Width(leftSide) - lipgloss.Width(statsStr) - lipgloss.Width(reviewInfo) - lipgloss.Width(themeLabel) - lipgloss.Width(rightSide)

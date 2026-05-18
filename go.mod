@@ -1,4 +1,4 @@
-module github.com/yusuf/git-review
+module github.com/YusufHosny/git-review
 
 go 1.24.0
 

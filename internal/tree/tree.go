@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/yusuf/git-review/internal/review"
+	"github.com/YusufHosny/git-review/internal/review"
 )
 
 type FileTree struct {

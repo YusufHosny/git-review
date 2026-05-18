@@ -10,10 +10,10 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/yusuf/git-review/internal/config"
-	"github.com/yusuf/git-review/internal/git"
-	"github.com/yusuf/git-review/internal/review"
-	"github.com/yusuf/git-review/internal/tree"
+	"github.com/YusufHosny/git-review/internal/config"
+	"github.com/YusufHosny/git-review/internal/git"
+	"github.com/YusufHosny/git-review/internal/review"
+	"github.com/YusufHosny/git-review/internal/tree"
 )
 
 type Focus int

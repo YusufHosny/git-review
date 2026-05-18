@@ -7,10 +7,11 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/yusuf/git-review/internal/config"
-	"github.com/yusuf/git-review/internal/git"
-	"github.com/yusuf/git-review/internal/review"
-	"github.com/yusuf/git-review/internal/ui"
+	"github.com/YusufHosny/git-review/internal/config"
+	"github.com/YusufHosny/git-review/internal/git"
+	"github.com/YusufHosny/git-review/internal/review"
+	"github.com/YusufHosny/git-review/internal/themes"
+	"github.com/YusufHosny/git-review/internal/ui"
 )
 
 var version = "0.1.0"
@@ -29,6 +30,7 @@ func main() {
 
 	doReset := flag.Bool("reset", false, "Reset all review state for current branch (non-TUI)")
 	doExport := flag.String("export", "", "Export comments to markdown file (non-TUI)")
+	exportClip := flag.Bool("e", false, "Export comments to clipboard only (non-TUI)")
 	doStatus := flag.Bool("status", false, "Print review status summary (non-TUI)")
 
 	flag.Usage = func() {
@@ -51,6 +53,8 @@ func main() {
 	}
 
 	cfg := config.Load()
+
+	ui.Themes = themes.LoadAll()
 
 	gitClient := &git.Client{}
 
@@ -99,19 +103,24 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *doExport != "" {
-		outputPath := *doExport
-		if outputPath == "" {
-			outputPath = "review-comments.md"
-		}
+	if *exportClip || *doExport != "" {
 		content := review.ExportMarkdown(reviewState, rangeLabel)
-		if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing export: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Exported to %s\n", outputPath)
-		if err := review.CopyToClipboard(content); err == nil {
-			fmt.Println("(also copied to clipboard)")
+		if *exportClip && *doExport == "" {
+			if err := review.CopyToClipboard(content); err != nil {
+				fmt.Fprintf(os.Stderr, "Error copying to clipboard: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Copied to clipboard.")
+		} else {
+			outputPath := *doExport
+			if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing export: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Exported to %s\n", outputPath)
+			if err := review.CopyToClipboard(content); err == nil {
+				fmt.Println("(also copied to clipboard)")
+			}
 		}
 		os.Exit(0)
 	}

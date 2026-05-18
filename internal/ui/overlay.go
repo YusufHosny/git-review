@@ -177,7 +177,12 @@ func ansiSafeReplace(line string, x, w int, overlay string) string {
 
 	runes := []rune(stripped)
 	left := string(runes[:x])
-	return left + overlay
+	rightStart := x + w
+	right := ""
+	if rightStart < lineW {
+		right = string(runes[rightStart:])
+	}
+	return left + overlay + right
 }
 
 func StripAnsiSimple(s string) string {
