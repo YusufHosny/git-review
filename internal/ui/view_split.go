@@ -9,14 +9,13 @@ import (
 )
 
 type splitLine struct {
-	leftNum  int
-	leftLine string
-	rightNum int
+	leftNum   int
+	leftLine  string
+	rightNum  int
 	rightLine string
-	kind     string // "context", "add", "del", "hunk"
+	kind      string // "context", "add", "del", "change", "hunk"
 }
 
-// parseSplitLines converts unified diff lines into side-by-side pairs.
 func parseSplitLines(diffLines []string) []splitLine {
 	var result []splitLine
 	var delBuf []string
@@ -26,11 +25,8 @@ func parseSplitLines(diffLines []string) []splitLine {
 	rightLine := 1
 
 	flush := func() {
-		maxLen := len(delBuf)
-		if len(addBuf) > maxLen {
-			maxLen = len(addBuf)
-		}
-		for i := 0; i < maxLen; i++ {
+		maxLen := max(len(delBuf), len(addBuf))
+		for i := range maxLen {
 			var left, right string
 			var ln, rn int
 			if i < len(delBuf) {
@@ -50,11 +46,11 @@ func parseSplitLines(diffLines []string) []splitLine {
 				kind = "add"
 			}
 			result = append(result, splitLine{
-				leftNum:  ln,
-				leftLine: left,
-				rightNum: rn,
+				leftNum:   ln,
+				leftLine:  left,
+				rightNum:  rn,
 				rightLine: right,
-				kind:     kind,
+				kind:      kind,
 			})
 		}
 		delBuf = delBuf[:0]
@@ -62,8 +58,7 @@ func parseSplitLines(diffLines []string) []splitLine {
 	}
 
 	for _, raw := range diffLines {
-		clean := stripAnsi(raw)
-		clean = strings.TrimRight(clean, "\r")
+		clean := strings.TrimRight(stripAnsi(raw), "\r")
 
 		if isDiffMetadata(clean) {
 			flush()
@@ -84,11 +79,11 @@ func parseSplitLines(diffLines []string) []splitLine {
 				content = content[1:]
 			}
 			result = append(result, splitLine{
-				leftNum:  leftLine,
-				leftLine: content,
-				rightNum: rightLine,
+				leftNum:   leftLine,
+				leftLine:  content,
+				rightNum:  rightLine,
 				rightLine: content,
-				kind:     "context",
+				kind:      "context",
 			})
 			leftLine++
 			rightLine++
@@ -99,86 +94,57 @@ func parseSplitLines(diffLines []string) []splitLine {
 }
 
 func (m Model) renderSplitDiff(contentHeight int) string {
-	paneW := m.diffViewport.Width - 2
-	colW := (paneW - 3) / 2 // 3 for the middle divider
-	if colW < 10 {
-		colW = 10
-	}
+	paneW := m.diffViewport.Width - 4
+	colW := max((paneW-3)/2, 10)
 	numW := 5
 
 	splitLines := parseSplitLines(m.diffLines)
 
-	// Apply scroll offset
 	start := m.splitOffset
 	if start >= len(splitLines) {
 		start = 0
 	}
-	end := start + contentHeight
-	if end > len(splitLines) {
-		end = len(splitLines)
-	}
+	end := min(start+contentHeight, len(splitLines))
 
 	var sb strings.Builder
 
 	addBg := m.activeTheme.AddBg
 	delBg := m.activeTheme.DelBg
 	hunkFg := m.activeTheme.CommentFg
+	numStyle := lipgloss.NewStyle().Foreground(m.activeTheme.LineNumberFg)
 
 	for _, sl := range splitLines[start:end] {
-		switch sl.kind {
-		case "hunk":
-			hunkStyle := lipgloss.NewStyle().Foreground(hunkFg)
-			full := hunkStyle.Render(ansi.Truncate(sl.leftLine, paneW, ""))
-			sb.WriteString(full + "\n")
+		if sl.kind == "hunk" {
+			sb.WriteString(lipgloss.NewStyle().Foreground(hunkFg).Render(ansi.Truncate(sl.leftLine, paneW, "")) + "\n")
 			continue
 		}
 
-		// Left column
-		var leftNum string
+		contentW := max(colW-numW-1, 1)
+
+		leftNum := strings.Repeat(" ", numW)
 		if sl.leftNum > 0 {
 			leftNum = fmt.Sprintf("%*d", numW, sl.leftNum)
-		} else {
-			leftNum = strings.Repeat(" ", numW)
 		}
-
-		// Right column
-		var rightNum string
+		rightNum := strings.Repeat(" ", numW)
 		if sl.rightNum > 0 {
 			rightNum = fmt.Sprintf("%*d", numW, sl.rightNum)
-		} else {
-			rightNum = strings.Repeat(" ", numW)
 		}
 
-		contentW := colW - numW - 1
-		if contentW < 1 {
-			contentW = 1
-		}
-
-		leftContent := ansi.Truncate(sl.leftLine, contentW, "")
-		rightContent := ansi.Truncate(sl.rightLine, contentW, "")
-
-		// Pad to content width
-		leftContent = padRight(leftContent, contentW)
-		rightContent = padRight(rightContent, contentW)
-
-		numStyle := lipgloss.NewStyle().Foreground(m.activeTheme.LineNumberFg)
+		leftContent := padRight(ansi.Truncate(sl.leftLine, contentW, ""), contentW)
+		rightContent := padRight(ansi.Truncate(sl.rightLine, contentW, ""), contentW)
 
 		var leftStr, rightStr string
 		switch sl.kind {
 		case "del":
-			delStyle := lipgloss.NewStyle().Background(delBg)
-			leftStr = numStyle.Render(leftNum) + " " + delStyle.Render(leftContent)
+			leftStr = numStyle.Render(leftNum) + " " + lipgloss.NewStyle().Background(delBg).Render(leftContent)
 			rightStr = strings.Repeat(" ", numW+1+contentW)
 		case "add":
-			addStyle := lipgloss.NewStyle().Background(addBg)
 			leftStr = strings.Repeat(" ", numW+1+contentW)
-			rightStr = numStyle.Render(rightNum) + " " + addStyle.Render(rightContent)
+			rightStr = numStyle.Render(rightNum) + " " + lipgloss.NewStyle().Background(addBg).Render(rightContent)
 		case "change":
-			delStyle := lipgloss.NewStyle().Background(delBg)
-			addStyle := lipgloss.NewStyle().Background(addBg)
-			leftStr = numStyle.Render(leftNum) + " " + delStyle.Render(leftContent)
-			rightStr = numStyle.Render(rightNum) + " " + addStyle.Render(rightContent)
-		default: // context
+			leftStr = numStyle.Render(leftNum) + " " + lipgloss.NewStyle().Background(delBg).Render(leftContent)
+			rightStr = numStyle.Render(rightNum) + " " + lipgloss.NewStyle().Background(addBg).Render(rightContent)
+		default:
 			leftStr = numStyle.Render(leftNum) + " " + leftContent
 			rightStr = numStyle.Render(rightNum) + " " + rightContent
 		}
@@ -192,17 +158,16 @@ func (m Model) renderSplitDiff(contentHeight int) string {
 		diffPaneStyle = FocusedPaneStyle
 	}
 
-	return diffPaneStyle.Copy().
-		Width(m.diffViewport.Width - 2).
-		Height(contentHeight).
+	return diffPaneStyle.
+		Width(m.diffViewport.Width - 4).
+		Height(contentHeight - 2).
 		MaxHeight(contentHeight).
 		Render("\n" + strings.TrimRight(sb.String(), "\n"))
 }
 
 func padRight(s string, width int) string {
-	w := lipgloss.Width(s)
-	if w >= width {
-		return s
+	if w := lipgloss.Width(s); w < width {
+		return s + strings.Repeat(" ", width-w)
 	}
-	return s + strings.Repeat(" ", width-w)
+	return s
 }

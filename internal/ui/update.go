@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,14 @@ import (
 	"github.com/YusufHosny/git-review/internal/review"
 	"github.com/YusufHosny/git-review/internal/tree"
 )
+
+var ctrlRe = regexp.MustCompile(`[\x00-\x08\x0B-\x0C\x0E-\x1F]`)
+
+// c1CtrlRe matches C1 control characters (U+0080–U+009F) encoded as valid UTF-8.
+// Standard VTE terminals consume these as 8-bit control sequences (invisible), but
+// Kitty renders them as visible placeholder glyphs (~1 cell). Since Go's width
+// libraries measure them as 0-wide, they cause per-char overflow in Kitty only.
+var c1CtrlRe = regexp.MustCompile(`[\x{0080}-\x{009F}]`)
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -559,7 +568,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle async messages
 	switch msg := msg.(type) {
 	case git.DiffMsg:
-		fullLines := strings.Split(msg.Content, "\n")
+		content := strings.ToValidUTF8(msg.Content, "?")
+		content = strings.ReplaceAll(content, "\t", "    ")
+		content = ctrlRe.ReplaceAllString(content, "?")
+		content = c1CtrlRe.ReplaceAllString(content, "?")
+		
+		fullLines := strings.Split(content, "\n")
 		var cleanLines, hlLines []string
 		var added, deleted int
 		foundHunk := false

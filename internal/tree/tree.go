@@ -84,9 +84,7 @@ func New(paths []string) *FileTree {
 }
 
 func addPath(root *Node, path string) {
-	cleanPath := filepath.ToSlash(filepath.Clean(path))
-	parts := strings.Split(cleanPath, "/")
-
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")
 	current := root
 	for i, name := range parts {
 		if _, exists := current.Children[name]; !exists {
@@ -119,14 +117,11 @@ func (t *FileTree) Items(flat bool, statuses map[string]review.FileStatus) []lis
 }
 
 func (t *FileTree) flattenFiles(node *Node, items *[]list.Item, statuses map[string]review.FileStatus) {
-	children := sortedChildren(node)
-	for _, child := range children {
+	for _, child := range sortedChildren(node) {
 		if !child.IsDir {
 			*items = append(*items, TreeItem{
 				Name:     child.Name,
 				FullPath: child.FullPath,
-				IsDir:    false,
-				Depth:    child.Depth,
 				Icon:     getIcon(child.Name, false),
 				Status:   statuses[child.FullPath],
 				FlatMode: true,
@@ -137,8 +132,7 @@ func (t *FileTree) flattenFiles(node *Node, items *[]list.Item, statuses map[str
 }
 
 func (t *FileTree) flatten(node *Node, items *[]list.Item, statuses map[string]review.FileStatus) {
-	children := sortedChildren(node)
-	for _, child := range children {
+	for _, child := range sortedChildren(node) {
 		*items = append(*items, TreeItem{
 			Name:     child.Name,
 			FullPath: child.FullPath,
@@ -147,7 +141,6 @@ func (t *FileTree) flatten(node *Node, items *[]list.Item, statuses map[string]r
 			Expanded: child.Expanded,
 			Icon:     getIcon(child.Name, child.IsDir),
 			Status:   statuses[child.FullPath],
-			FlatMode: false,
 		})
 		if child.IsDir && child.Expanded {
 			t.flatten(child, items, statuses)
@@ -170,8 +163,7 @@ func sortedChildren(node *Node) []*Node {
 }
 
 func (t *FileTree) ToggleExpand(fullPath string) {
-	node := findNode(t.Root, fullPath)
-	if node != nil && node.IsDir {
+	if node := findNode(t.Root, fullPath); node != nil && node.IsDir {
 		node.Expanded = !node.Expanded
 	}
 }
@@ -182,9 +174,6 @@ func findNode(node *Node, fullPath string) *Node {
 	}
 	for _, child := range node.Children {
 		if strings.HasPrefix(fullPath, child.FullPath) {
-			if child.FullPath == fullPath {
-				return child
-			}
 			if found := findNode(child, fullPath); found != nil {
 				return found
 			}
@@ -197,8 +186,7 @@ func getIcon(name string, isDir bool) string {
 	if isDir {
 		return ""
 	}
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
+	switch strings.ToLower(filepath.Ext(name)) {
 	case ".go":
 		return ""
 	case ".js", ".ts", ".tsx", ".jsx":

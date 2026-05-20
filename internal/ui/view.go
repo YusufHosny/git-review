@@ -45,8 +45,8 @@ func (m Model) View() string {
 
 		treeView := treeStyle.Copy().
 			Width(m.fileList.Width()).
-			Height(contentHeight).
-			MaxHeight(contentHeight).
+		Height(contentHeight - 2).
+		MaxHeight(contentHeight).
 			Render(m.fileList.View())
 
 		var rightPaneView string
@@ -87,7 +87,8 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 	}
 	start := m.diffViewport.YOffset
 
-	// wrapAt = Width(diffViewport.Width-2) - 2*Padding(0,1) = diffViewport.Width-4.
+	// Width(diffViewport.Width-4) = content-box text area (excludes 2 padding + 2 border).
+	// wrapAt = diffViewport.Width-4.
 	// lineNum(5) + gutter(4) = 9 chars overhead for numbered lines.
 	// So codeMaxW = diffViewport.Width-4-9 = diffViewport.Width-13.
 	// maxLineWidth = codeMaxW+4 (gutter) = diffViewport.Width-9.
@@ -362,8 +363,8 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 	}
 
 	return diffPaneStyle.Copy().
-		Width(m.diffViewport.Width - 2).
-		Height(contentHeight).
+		Width(m.diffViewport.Width - 4).
+		Height(contentHeight - 2).
 		MaxHeight(contentHeight).
 		Render(diffContentStr)
 }

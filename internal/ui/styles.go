@@ -2,15 +2,12 @@ package ui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Theme holds all color tokens for a visual theme.
 type Theme struct {
 	Name string
 
-	// Diff backgrounds
 	AddBg lipgloss.Color
 	DelBg lipgloss.Color
 
-	// Cursor line backgrounds
 	CursorAddBg  lipgloss.Color
 	CursorDelBg  lipgloss.Color
 	CursorCtxBg  lipgloss.Color
@@ -18,26 +15,21 @@ type Theme struct {
 	CursorDelFg  lipgloss.Color
 	CursorCtxFg  lipgloss.Color
 
-	// Gutter / diff markers
 	GutterAdd lipgloss.Color
 	GutterDel lipgloss.Color
 	GutterCtx lipgloss.Color
 
-	// Review status colors in the tree
 	StatusApproved lipgloss.Color
 	StatusChanged  lipgloss.Color
 	StatusViewed   lipgloss.Color
 	StatusNew      lipgloss.Color
 
-	// Comment ghost lines
 	CommentFg lipgloss.Color
 	CommentBg lipgloss.Color
 
-	// Search highlight
 	SearchBg lipgloss.Color
 	SearchFg lipgloss.Color
 
-	// Borders / UI chrome
 	BorderNormal  lipgloss.Color
 	BorderFocused lipgloss.Color
 	TopBarBg      lipgloss.Color
@@ -45,30 +37,21 @@ type Theme struct {
 	StatusBarBg   lipgloss.Color
 	StatusBarFg   lipgloss.Color
 
-	// Text
 	DimText     lipgloss.Color
 	NormalText  lipgloss.Color
 	BrightText  lipgloss.Color
 	AccentText  lipgloss.Color
 	AccentText2 lipgloss.Color
 
-	// Stats
 	StatsAdded   lipgloss.Color
 	StatsDeleted lipgloss.Color
 
-	// Line numbers
 	LineNumberFg lipgloss.Color
 
-	// Syntax highlight theme name (for chroma)
 	ChromaTheme string
 }
 
-
-// Themes is populated at startup from ~/.config/git-review/themes/.
 var Themes []Theme
-
-
-// === Dynamic styles set by InitStyles ===
 
 var (
 	PaneStyle        lipgloss.Style
@@ -100,17 +83,17 @@ var (
 
 	SearchMatchStyle lipgloss.Style
 
-	StatusBarStyle     lipgloss.Style
-	StatusKeyStyle     lipgloss.Style
-	StatusRepoStyle    lipgloss.Style
-	StatusBranchStyle  lipgloss.Style
-	StatusAddedStyle   lipgloss.Style
-	StatusDeletedStyle lipgloss.Style
-	StatusDividerStyle lipgloss.Style
-	StatusNotifyStyle  lipgloss.Style
-	StatusApprovedStyle  lipgloss.Style
-	StatusChangedStyle   lipgloss.Style
-	StatusViewedStyle    lipgloss.Style
+	StatusBarStyle      lipgloss.Style
+	StatusKeyStyle      lipgloss.Style
+	StatusRepoStyle     lipgloss.Style
+	StatusBranchStyle   lipgloss.Style
+	StatusAddedStyle    lipgloss.Style
+	StatusDeletedStyle  lipgloss.Style
+	StatusDividerStyle  lipgloss.Style
+	StatusNotifyStyle   lipgloss.Style
+	StatusApprovedStyle lipgloss.Style
+	StatusChangedStyle  lipgloss.Style
+	StatusViewedStyle   lipgloss.Style
 
 	HelpDrawerStyle lipgloss.Style
 	HelpTextStyle   lipgloss.Style
@@ -121,8 +104,8 @@ var (
 	EmptyHeaderStyle lipgloss.Style
 	EmptyCodeStyle   lipgloss.Style
 
-	OverlayStyle  lipgloss.Style
-	OverlayTitle  lipgloss.Style
+	OverlayStyle lipgloss.Style
+	OverlayTitle lipgloss.Style
 
 	ColorText lipgloss.Color
 )

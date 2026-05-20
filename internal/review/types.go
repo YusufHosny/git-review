@@ -8,14 +8,7 @@ const (
 	StatusUnreviewed FileStatus = "unreviewed"
 	StatusViewed     FileStatus = "viewed"
 	StatusApproved   FileStatus = "approved"
-	StatusChanged    FileStatus = "changed" // approved but has new commits since
-)
-
-type ReviewMode string
-
-const (
-	ModeBranchVsBase ReviewMode = "branch-vs-base"
-	ModeCustomRange  ReviewMode = "custom-range"
+	StatusChanged    FileStatus = "changed"
 )
 
 type FileState struct {
@@ -33,14 +26,13 @@ type Comment struct {
 }
 
 type State struct {
-	Version         int                    `json:"version"`
-	Branch          string                 `json:"branch"`
-	Mode            ReviewMode             `json:"mode"`
-	BaseRef         string                 `json:"base_ref,omitempty"`
-	MergeBaseCommit string                 `json:"merge_base_commit,omitempty"`
-	RangeFrom       string                 `json:"range_from"`
-	RangeTo         string                 `json:"range_to"`
-	UpdatedAt       time.Time              `json:"updated_at"`
-	Files           map[string]*FileState  `json:"files"`
-	Comments        []*Comment             `json:"comments"`
+	Version         int                   `json:"version"`
+	Branch          string                `json:"branch"`
+	BaseRef         string                `json:"base_ref,omitempty"`
+	MergeBaseCommit string                `json:"merge_base_commit,omitempty"`
+	RangeFrom       string                `json:"range_from"`
+	RangeTo         string                `json:"range_to"`
+	UpdatedAt       time.Time             `json:"updated_at"`
+	Files           map[string]*FileState `json:"files"`
+	Comments        []*Comment            `json:"comments"`
 }

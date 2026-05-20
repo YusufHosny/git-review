@@ -108,15 +108,6 @@ func (s *State) CommentsForFile(file string) []*Comment {
 	return out
 }
 
-func (s *State) CommentAtLine(file string, lineIndex int) *Comment {
-	for _, c := range s.Comments {
-		if c.File == file && c.DiffLineIndex == lineIndex {
-			return c
-		}
-	}
-	return nil
-}
-
 func (s *State) Reset() {
 	s.Files = make(map[string]*FileState)
 	s.Comments = []*Comment{}
@@ -136,6 +127,8 @@ func branchSlug(branch string) string {
 
 func newID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
 	return hex.EncodeToString(b)
 }

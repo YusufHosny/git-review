@@ -18,7 +18,6 @@ import (
 //go:embed defaults/*.yaml
 var defaultsFS embed.FS
 
-// defaultOrder defines the canonical ordering of built-in themes.
 var defaultOrder = []string{
 	"dark", "dracula", "catppuccin", "gruvbox",
 	"tokyo-night", "rose-pine", "onedark", "solarized", "light",
@@ -45,8 +44,6 @@ type base16YAML struct {
 	Base0F      string `yaml:"base0F"`
 }
 
-// LoadAll exports default YAMLs (if absent) and loads all themes from
-// ~/.config/git-review/themes/. Falls back to embedded defaults on any error.
 func LoadAll() []ui.Theme {
 	dir := ThemesDir()
 	exportDefaults(dir)
@@ -56,13 +53,11 @@ func LoadAll() []ui.Theme {
 	return LoadEmbedded()
 }
 
-// ThemesDir returns the user's themes directory.
 func ThemesDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "git-review", "themes")
 }
 
-// LoadEmbedded parses and returns the compiled-in default themes without touching disk.
 func LoadEmbedded() []ui.Theme {
 	entries, _ := defaultsFS.ReadDir("defaults")
 	var themes []ui.Theme
@@ -74,8 +69,7 @@ func LoadEmbedded() []ui.Theme {
 		if err != nil {
 			continue
 		}
-		t, err := parseBase16(data)
-		if err == nil && t.Name != "" {
+		if t, err := parseBase16(data); err == nil && t.Name != "" {
 			themes = append(themes, t)
 		}
 	}
@@ -91,7 +85,7 @@ func exportDefaults(dir string) {
 	for _, e := range entries {
 		dst := filepath.Join(dir, e.Name())
 		if _, err := os.Stat(dst); err == nil {
-			continue // already exists — leave the user's version alone
+			continue
 		}
 		data, _ := defaultsFS.ReadFile("defaults/" + e.Name())
 		_ = os.WriteFile(dst, data, 0644)
@@ -112,8 +106,7 @@ func loadDir(dir string) []ui.Theme {
 		if err != nil {
 			continue
 		}
-		t, err := parseBase16(data)
-		if err == nil && t.Name != "" {
+		if t, err := parseBase16(data); err == nil && t.Name != "" {
 			themes = append(themes, t)
 		}
 	}
@@ -128,7 +121,7 @@ func sortThemes(themes []ui.Theme) {
 				return i
 			}
 		}
-		return len(defaultOrder) // user themes sort after defaults
+		return len(defaultOrder)
 	}
 	sort.SliceStable(themes, func(i, j int) bool {
 		ri, rj := rank(themes[i].Name), rank(themes[j].Name)
@@ -152,12 +145,11 @@ func parseBase16(data []byte) (ui.Theme, error) {
 
 func fromBase16(f base16YAML) ui.Theme {
 	bg := strings.ToLower(f.Base00)
+	hex := func(s string) lipgloss.Color { return lipgloss.Color("#" + strings.ToLower(s)) }
 
-	var cursorFg string
+	cursorFg := hex(f.Base06)
 	if isLight(bg) {
-		cursorFg = strings.ToLower(f.Base07) // near-black in light schemes
-	} else {
-		cursorFg = strings.ToLower(f.Base06) // near-white in dark schemes
+		cursorFg = hex(f.Base07)
 	}
 
 	chroma := f.ChromaTheme
@@ -171,35 +163,35 @@ func fromBase16(f base16YAML) ui.Theme {
 		DelBg:          lipgloss.Color(blendColors(f.Base08, bg, 0.18)),
 		CursorAddBg:    lipgloss.Color(blendColors(f.Base0B, bg, 0.38)),
 		CursorDelBg:    lipgloss.Color(blendColors(f.Base08, bg, 0.38)),
-		CursorCtxBg:    lipgloss.Color("#" + strings.ToLower(f.Base02)),
-		CursorAddFg:    lipgloss.Color("#" + cursorFg),
-		CursorDelFg:    lipgloss.Color("#" + cursorFg),
-		CursorCtxFg:    lipgloss.Color("#" + strings.ToLower(f.Base05)),
-		GutterAdd:      lipgloss.Color("#" + strings.ToLower(f.Base0B)),
-		GutterDel:      lipgloss.Color("#" + strings.ToLower(f.Base08)),
-		GutterCtx:      lipgloss.Color("#" + strings.ToLower(f.Base03)),
-		StatusApproved: lipgloss.Color("#" + strings.ToLower(f.Base0B)),
-		StatusChanged:  lipgloss.Color("#" + strings.ToLower(f.Base08)),
-		StatusViewed:   lipgloss.Color("#" + strings.ToLower(f.Base0A)),
-		StatusNew:      lipgloss.Color("#" + strings.ToLower(f.Base04)),
-		CommentFg:      lipgloss.Color("#" + strings.ToLower(f.Base0D)),
-		CommentBg:      lipgloss.Color("#" + strings.ToLower(f.Base01)),
-		SearchBg:       lipgloss.Color("#" + strings.ToLower(f.Base0A)),
-		SearchFg:       lipgloss.Color("#" + bg),
-		BorderNormal:   lipgloss.Color("#" + strings.ToLower(f.Base02)),
-		BorderFocused:  lipgloss.Color("#" + strings.ToLower(f.Base0D)),
-		TopBarBg:       lipgloss.Color("#" + strings.ToLower(f.Base01)),
-		TopBarFg:       lipgloss.Color("#" + strings.ToLower(f.Base05)),
-		StatusBarBg:    lipgloss.Color("#" + strings.ToLower(f.Base01)),
-		StatusBarFg:    lipgloss.Color("#" + strings.ToLower(f.Base05)),
-		DimText:        lipgloss.Color("#" + strings.ToLower(f.Base03)),
-		NormalText:     lipgloss.Color("#" + strings.ToLower(f.Base05)),
-		BrightText:     lipgloss.Color("#" + strings.ToLower(f.Base06)),
-		AccentText:     lipgloss.Color("#" + strings.ToLower(f.Base0D)),
-		AccentText2:    lipgloss.Color("#" + strings.ToLower(f.Base0C)),
-		StatsAdded:     lipgloss.Color("#" + strings.ToLower(f.Base0B)),
-		StatsDeleted:   lipgloss.Color("#" + strings.ToLower(f.Base08)),
-		LineNumberFg:   lipgloss.Color("#" + strings.ToLower(f.Base03)),
+		CursorCtxBg:    hex(f.Base02),
+		CursorAddFg:    cursorFg,
+		CursorDelFg:    cursorFg,
+		CursorCtxFg:    hex(f.Base05),
+		GutterAdd:      hex(f.Base0B),
+		GutterDel:      hex(f.Base08),
+		GutterCtx:      hex(f.Base03),
+		StatusApproved: hex(f.Base0B),
+		StatusChanged:  hex(f.Base08),
+		StatusViewed:   hex(f.Base0A),
+		StatusNew:      hex(f.Base04),
+		CommentFg:      hex(f.Base0D),
+		CommentBg:      hex(f.Base01),
+		SearchBg:       hex(f.Base0A),
+		SearchFg:       hex(f.Base00),
+		BorderNormal:   hex(f.Base02),
+		BorderFocused:  hex(f.Base0D),
+		TopBarBg:       hex(f.Base01),
+		TopBarFg:       hex(f.Base05),
+		StatusBarBg:    hex(f.Base01),
+		StatusBarFg:    hex(f.Base05),
+		DimText:        hex(f.Base03),
+		NormalText:     hex(f.Base05),
+		BrightText:     hex(f.Base06),
+		AccentText:     hex(f.Base0D),
+		AccentText2:    hex(f.Base0C),
+		StatsAdded:     hex(f.Base0B),
+		StatsDeleted:   hex(f.Base08),
+		LineNumberFg:   hex(f.Base03),
 		ChromaTheme:    chroma,
 	}
 }

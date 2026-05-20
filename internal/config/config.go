@@ -14,10 +14,10 @@ type Config struct {
 }
 
 type UIConfig struct {
-	Theme            string  `yaml:"theme"`
-	LineNumbers      string  `yaml:"line_numbers"`
-	SplitWidthRatio  float64 `yaml:"split_width_ratio"`
-	ShowCommentsInline bool  `yaml:"show_comments_inline"`
+	Theme              string  `yaml:"theme"`
+	LineNumbers        string  `yaml:"line_numbers"`
+	SplitWidthRatio    float64 `yaml:"split_width_ratio"`
+	ShowCommentsInline bool    `yaml:"show_comments_inline"`
 }
 
 func Load() Config {
@@ -31,20 +31,14 @@ func Load() Config {
 	}
 
 	home, _ := os.UserHomeDir()
-	configPath := filepath.Join(home, ".config", "git-review", "config.yaml")
-
-	if data, err := os.ReadFile(configPath); err == nil {
+	if data, err := os.ReadFile(filepath.Join(home, ".config", "git-review", "config.yaml")); err == nil {
 		_ = yaml.Unmarshal(data, &cfg)
 	}
 
-	if cfg.Editor == "" {
-		cfg.Editor = os.Getenv("GIT_REVIEW_EDITOR")
-	}
-	if cfg.Editor == "" {
-		cfg.Editor = os.Getenv("EDITOR")
-	}
-	if cfg.Editor == "" {
-		cfg.Editor = os.Getenv("VISUAL")
+	for _, env := range []string{"GIT_REVIEW_EDITOR", "EDITOR", "VISUAL"} {
+		if cfg.Editor == "" {
+			cfg.Editor = os.Getenv(env)
+		}
 	}
 	if cfg.Editor == "" {
 		cfg.Editor = "vi"
@@ -66,7 +60,6 @@ func SaveTheme(themeName string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	configPath := filepath.Join(dir, "config.yaml")
 
 	cfg := Load()
 	cfg.UI.Theme = themeName
@@ -75,5 +68,5 @@ func SaveTheme(themeName string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return os.WriteFile(filepath.Join(dir, "config.yaml"), data, 0644)
 }

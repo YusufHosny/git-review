@@ -11,7 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var ansiRe = regexp.MustCompile("[][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
+var ansiRe = regexp.MustCompile("[][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
 var hunkHeaderRe = regexp.MustCompile(`^@@ \-\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
 type DiffMsg struct{ Content string }
@@ -30,8 +30,7 @@ type DiffLine struct {
 type Client struct{}
 
 func (c *Client) gitCmd(args ...string) *exec.Cmd {
-	fullArgs := append([]string{"--no-pager"}, args...)
-	cmd := exec.Command("git", fullArgs...)
+	cmd := exec.Command("git", append([]string{"--no-pager"}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	return cmd
 }
@@ -49,12 +48,8 @@ func (c *Client) GetRepoName() string {
 	if err != nil {
 		return "repo"
 	}
-	path := strings.TrimSpace(string(out))
-	parts := strings.Split(path, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return "repo"
+	parts := strings.Split(strings.TrimSpace(string(out)), "/")
+	return parts[len(parts)-1]
 }
 
 func (c *Client) GetGitDir() string {
@@ -89,30 +84,34 @@ func (c *Client) MergeBase(ref1, ref2 string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// AutoDetectBase tries common base branch names in order.
 func (c *Client) AutoDetectBase(override string) string {
 	if override != "" {
 		return override
 	}
-	candidates := []string{"main", "master", "develop"}
-	for _, candidate := range candidates {
-		_, err := c.gitCmd("rev-parse", "--verify", candidate).Output()
-		if err == nil {
+	for _, candidate := range []string{"main", "master", "develop"} {
+		if _, err := c.gitCmd("rev-parse", "--verify", candidate).Output(); err == nil {
 			return candidate
 		}
 	}
 	return "HEAD"
 }
 
-// diffArg returns the right argument for git diff.
-// When to is "HEAD" we omit it so git compares from..working-tree
-// (includes staged + unstaged changes, not just committed).
-// When to is "--cached" the caller handles --cached mode separately.
+// When to is "HEAD", omit it so git diff compares against the working tree (not just committed changes).
 func diffArg(from, to string) string {
 	if to == "HEAD" {
 		return from
 	}
 	return from + ".." + to
+}
+
+func appendUniqueLines(files []string, seen map[string]bool, data []byte) []string {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+		if f := strings.TrimSpace(line); f != "" && !seen[f] {
+			seen[f] = true
+			files = append(files, f)
+		}
+	}
+	return files
 }
 
 func (c *Client) ListChangedFiles(from, to string) ([]string, error) {
@@ -128,26 +127,11 @@ func (c *Client) ListChangedFiles(from, to string) ([]string, error) {
 	}
 
 	seen := make(map[string]bool)
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.TrimSpace(line)
-		if f != "" && !seen[f] {
-			seen[f] = true
-			files = append(files, f)
-		}
-	}
+	files := appendUniqueLines(nil, seen, out)
 
-	// When comparing to the working tree, include untracked files too.
 	if to == "HEAD" {
-		untracked, err := c.gitCmd("ls-files", "--others", "--exclude-standard").Output()
-		if err == nil {
-			for _, line := range strings.Split(strings.TrimSpace(string(untracked)), "\n") {
-				f := strings.TrimSpace(line)
-				if f != "" && !seen[f] {
-					seen[f] = true
-					files = append(files, f)
-				}
-			}
+		if untracked, err := c.gitCmd("ls-files", "--others", "--exclude-standard").Output(); err == nil {
+			files = appendUniqueLines(files, seen, untracked)
 		}
 	}
 
@@ -159,9 +143,9 @@ func (c *Client) DiffCmd(from, to, path string) tea.Cmd {
 		var out []byte
 		var err error
 		if to == "--cached" {
-			out, err = c.gitCmd("diff", "--cached", "--color=always", "--", path).Output()
+			out, err = c.gitCmd("diff", "--cached", "--", path).Output()
 		} else {
-			out, err = c.gitCmd("diff", "--color=always", diffArg(from, to), "--", path).Output()
+			out, err = c.gitCmd("diff", diffArg(from, to), "--", path).Output()
 		}
 		if err != nil {
 			return DiffMsg{Content: "Error fetching diff: " + err.Error()}
@@ -170,7 +154,7 @@ func (c *Client) DiffCmd(from, to, path string) tea.Cmd {
 		// Untracked files produce an empty diff — fall back to no-index diff.
 		if content == "" && to == "HEAD" {
 			if _, statErr := os.Stat(path); statErr == nil {
-				out, _ = exec.Command("git", "--no-pager", "diff", "--color=always", "--no-index", "/dev/null", path).Output()
+				out, _ = c.gitCmd("diff", "--no-index", "/dev/null", path).Output()
 				content = string(out)
 			}
 		}
@@ -193,18 +177,19 @@ func (c *Client) OpenEditorCmd(path string, lineNumber int, editor string) tea.C
 	})
 }
 
-func (c *Client) DiffStats(from, to string) (added int, deleted int, err error) {
-	var out []byte
+func (c *Client) numstat(from, to string) ([]byte, error) {
 	if to == "--cached" {
-		out, err = c.gitCmd("diff", "--cached", "--numstat").Output()
-	} else {
-		out, err = c.gitCmd("diff", "--numstat", diffArg(from, to)).Output()
+		return c.gitCmd("diff", "--cached", "--numstat").Output()
 	}
+	return c.gitCmd("diff", "--numstat", diffArg(from, to)).Output()
+}
+
+func (c *Client) DiffStats(from, to string) (added int, deleted int, err error) {
+	out, err := c.numstat(from, to)
 	if err != nil {
 		return 0, 0, fmt.Errorf("git diff numstat: %w", err)
 	}
-
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
@@ -227,19 +212,12 @@ func (c *Client) DiffStats(from, to string) (added int, deleted int, err error) 
 }
 
 func (c *Client) DiffStatsByFile(from, to string) (map[string][2]int, error) {
-	var out []byte
-	var err error
-	if to == "--cached" {
-		out, err = c.gitCmd("diff", "--cached", "--numstat").Output()
-	} else {
-		out, err = c.gitCmd("diff", "--numstat", diffArg(from, to)).Output()
-	}
+	out, err := c.numstat(from, to)
 	if err != nil {
 		return nil, fmt.Errorf("git diff numstat: %w", err)
 	}
-
 	result := make(map[string][2]int)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
@@ -263,8 +241,6 @@ func (c *Client) DiffStatsByFile(from, to string) (map[string][2]int, error) {
 	return result, nil
 }
 
-// HasChangedSince returns true if the file differs from commitSHA in the working tree.
-// Compares against the working tree (not ..HEAD) so uncommitted edits also trigger !.
 func (c *Client) HasChangedSince(commitSHA, path string) bool {
 	out, err := c.gitCmd("diff", "--name-only", commitSHA, "--", path).Output()
 	if err != nil {
@@ -273,7 +249,6 @@ func (c *Client) HasChangedSince(commitSHA, path string) bool {
 	return strings.TrimSpace(string(out)) != ""
 }
 
-// AllDiffLines returns all diff content lines across all changed files for fzf.
 func (c *Client) AllDiffLines(from, to string) ([]DiffLine, error) {
 	files, err := c.ListChangedFiles(from, to)
 	if err != nil {
@@ -283,27 +258,22 @@ func (c *Client) AllDiffLines(from, to string) ([]DiffLine, error) {
 	var result []DiffLine
 	for _, file := range files {
 		var out []byte
-		var err error
 		if to == "--cached" {
-			out, err = c.gitCmd("diff", "--cached", "--", file).Output()
+			out, _ = c.gitCmd("diff", "--cached", "--", file).Output()
 		} else {
 			out, err = c.gitCmd("diff", diffArg(from, to), "--", file).Output()
-		}
-		if err != nil || len(out) == 0 {
-			// Untracked file fallback
-			if to == "HEAD" {
+			if (err != nil || len(out) == 0) && to == "HEAD" {
 				if _, statErr := os.Stat(file); statErr == nil {
-					out, _ = exec.Command("git", "--no-pager", "diff", "--no-index", "/dev/null", file).Output()
+					out, _ = c.gitCmd("diff", "--no-index", "/dev/null", file).Output()
 				}
 			}
-			if len(out) == 0 {
-				continue
-			}
 		}
-		lines := strings.Split(string(out), "\n")
-		for i, line := range lines {
+		if len(out) == 0 {
+			continue
+		}
+		for i, line := range strings.Split(string(out), "\n") {
 			clean := StripAnsi(line)
-			if len(clean) == 0 {
+			if clean == "" {
 				continue
 			}
 			if strings.HasPrefix(clean, "+") && !strings.HasPrefix(clean, "+++") {
@@ -320,20 +290,14 @@ func (c *Client) CalculateFileLine(diffLines []string, visualLineIndex int) int 
 	if len(diffLines) == 0 {
 		return 1
 	}
-	if visualLineIndex < 0 {
-		visualLineIndex = 0
-	}
-	if visualLineIndex >= len(diffLines) {
-		visualLineIndex = len(diffLines) - 1
-	}
+	visualLineIndex = max(0, min(visualLineIndex, len(diffLines)-1))
 
 	currentLineNo := 1
 	mappedLineNo := 1
 	inHunk := false
 
 	for i := 0; i <= visualLineIndex; i++ {
-		cleanLine := StripAnsi(diffLines[i])
-		cleanLine = strings.TrimRight(cleanLine, "\r")
+		cleanLine := strings.TrimRight(StripAnsi(diffLines[i]), "\r")
 
 		if matches := hunkHeaderRe.FindStringSubmatch(cleanLine); len(matches) > 1 {
 			startLine, _ := strconv.Atoi(matches[1])

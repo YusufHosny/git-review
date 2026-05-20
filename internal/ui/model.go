@@ -23,7 +23,7 @@ const (
 	FocusDiff
 )
 
-var ansiRe = regexp.MustCompile("[][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
+var ansiRe = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`)
 var bgAnsiRe = regexp.MustCompile(`\x1b\[48;2;\d+;\d+;\d+m|\x1b\[4[0-9]m`)
 
 type StatsMsg struct {
@@ -54,33 +54,27 @@ type ExportDoneMsg struct {
 }
 
 type Model struct {
-	// === Panels ===
 	fileList     list.Model
 	treeState    *tree.FileTree
 	treeDelegate TreeDelegate
 	diffViewport viewport.Model
 
-	// === Selection ===
 	selectedPath   string
 	selectedStatus review.FileStatus
 
-	// === Diff content ===
 	diffLines       []string
 	diffHighlighted []string
 	diffCursor      int
 	visualMode      bool
 	visualStart     int
 
-	// The diff range actually shown (may differ from from/to for "changed" files)
 	currentFrom string
 	currentTo   string
 
-	// === Input state ===
 	inputBuffer    string
 	pendingZ       bool
-	pendingBracket rune // ']' or '[' for ]c/[c hunk navigation
+	pendingBracket rune
 
-	// === Layout ===
 	focus     Focus
 	showHelp  bool
 	flatMode  bool
@@ -88,53 +82,42 @@ type Model struct {
 	splitOffset int
 	width, height int
 
-	// === Git ===
 	gitClient     *git.Client
 	currentBranch string
 	repoName      string
 	headCommit    string
-	from, to      string // main diff range
+	from, to      string
 	rangeLabel    string
 
-	// === Stats ===
 	statsAdded, statsDeleted             int
 	currentFileAdded, currentFileDeleted int
 	fileStats                            map[string][2]int
 
-	// === Review ===
-	reviewState  *review.State
-	gitDir       string
-	// in-memory computed status (includes "changed" which is not stored)
+	reviewState      *review.State
+	gitDir           string
 	computedStatuses map[string]review.FileStatus
-	// comments indexed by line index for the current file
-	lineComments map[int]*review.Comment
+	lineComments     map[int]*review.Comment
 
-	// === Theme ===
 	themeIndex        int
 	activeTheme       Theme
 	themePickerCursor int
 
-	// === Config ===
 	cfg config.Config
 
-	// === Overlay ===
 	overlay       OverlayMode
 	confirmMsg    string
 	confirmAction func() tea.Cmd
 
-	// === Comment input ===
 	commentInput       textarea.Model
 	commentLineIndex   int
 	commentLineContent string
 
-	// === Search ===
 	searchMode    bool
 	searchInput   textinput.Model
 	searchQuery   string
 	searchMatches []int
 	searchCursor  int
 
-	// === Status bar notification ===
 	statusNotify string
 }
 
@@ -155,7 +138,6 @@ func NewModel(
 
 	files, _ := gitClient.ListChangedFiles(from, to)
 
-	// Build computed statuses (start from stored, "changed" is computed on startup)
 	computed := make(map[string]review.FileStatus)
 	for _, f := range files {
 		computed[f] = reviewState.GetFileStatus(f)
@@ -213,7 +195,6 @@ func NewModel(
 		fileStats:        make(map[string][2]int),
 	}
 
-	// Select first non-directory file
 	for idx, item := range items {
 		if ti, ok := item.(tree.TreeItem); ok && !ti.IsDir {
 			m.selectedPath = ti.FullPath
@@ -250,11 +231,8 @@ func (m Model) fetchStatsCmd() tea.Cmd {
 	}
 }
 
-// checkAllApprovedFilesCmd checks each approved file for post-approval changes.
 func (m Model) checkAllApprovedFilesCmd() tea.Cmd {
 	return func() tea.Msg {
-		// Collect all approved files and check for changes
-		// Returns a batch of ChangeCheckMsg
 		var msgs []tea.Msg
 		for file, fs := range m.reviewState.Files {
 			if fs.Status == review.StatusApproved && fs.ApprovedAtCommit != "" {
@@ -266,7 +244,6 @@ func (m Model) checkAllApprovedFilesCmd() tea.Cmd {
 	}
 }
 
-// batchMsg is a helper to return multiple messages from a single command.
 type batchMsg []tea.Msg
 
 func (m *Model) getRepeatCount() int {
@@ -307,33 +284,15 @@ func isDiffContentLine(cleanLine string) bool {
 }
 
 func (m *Model) setYOffset(offset int) {
-	maxOffset := m.maxScrollOffset()
-	if offset > maxOffset {
-		offset = maxOffset
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	m.diffViewport.YOffset = offset
+	m.diffViewport.YOffset = max(0, min(offset, m.maxScrollOffset()))
 }
 
 // codeMaxW returns the maximum code column width given the current viewport width.
 // Must match the calculation in renderUnifiedDiff.
 func (m *Model) codeMaxW() int {
-	maxLineWidth := m.diffViewport.Width - 9
-	if maxLineWidth < 1 {
-		maxLineWidth = 1
-	}
-	w := maxLineWidth - 4
-	if w < 1 {
-		w = 1
-	}
-	return w
+	return max(m.diffViewport.Width-13, 1)
 }
 
-// visualRowsForLine returns the number of terminal rows that logical line i
-// occupies when rendered (wrapping-aware, comment ghost rows included).
-// Hidden metadata lines return 0.
 func (m *Model) visualRowsForLine(i int) int {
 	if i < 0 || i >= len(m.diffLines) {
 		return 0
@@ -357,7 +316,6 @@ func (m *Model) visualRowsForLine(i int) int {
 	} else {
 		rows = (w + codeMaxW - 1) / codeMaxW
 	}
-	// Inline comment ghost adds one extra row.
 	if m.cfg.UI.ShowCommentsInline {
 		if _, hasComment := m.lineComments[i]; hasComment {
 			rows++
@@ -366,8 +324,6 @@ func (m *Model) visualRowsForLine(i int) int {
 	return rows
 }
 
-// diffContentHeight returns the effective number of visual rows available for
-// diff content, accounting for the "changed since approval" header row.
 func (m *Model) diffContentHeight() int {
 	h := m.diffViewport.Height
 	if m.computedStatuses[m.selectedPath] == review.StatusChanged && h > 0 {
@@ -376,9 +332,6 @@ func (m *Model) diffContentHeight() int {
 	return h
 }
 
-// maxScrollOffset computes the largest YOffset at which the viewport is still
-// fully filled. It walks backwards through diffLines counting visual rows
-// until it has accumulated enough to fill the effective content height.
 func (m *Model) maxScrollOffset() int {
 	h := m.diffContentHeight()
 	if h <= 0 || len(m.diffLines) == 0 {
@@ -394,8 +347,6 @@ func (m *Model) maxScrollOffset() int {
 	return 0
 }
 
-// offsetToShowCursorAtBottom returns the smallest YOffset at which diffCursor
-// is still within the viewport (cursor lands on the last visible row).
 func (m *Model) offsetToShowCursorAtBottom() int {
 	h := m.diffContentHeight()
 	if h <= 0 {
@@ -415,29 +366,18 @@ func (m *Model) snapCursor(idx int, dir int) int {
 	if len(m.diffLines) == 0 {
 		return 0
 	}
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(m.diffLines) {
-		idx = len(m.diffLines) - 1
-	}
+	idx = max(0, min(idx, len(m.diffLines)-1))
 
-	curr := idx
-	for curr >= 0 && curr < len(m.diffLines) {
-		cleanLine := stripAnsi(m.diffLines[curr])
-		if isDiffContentLine(cleanLine) {
+	for curr := idx; curr >= 0 && curr < len(m.diffLines); curr += dir {
+		if isDiffContentLine(stripAnsi(m.diffLines[curr])) {
 			return curr
 		}
-		curr += dir
 	}
 
-	curr = idx
-	for curr >= 0 && curr < len(m.diffLines) {
-		cleanLine := stripAnsi(m.diffLines[curr])
-		if isDiffContentLine(cleanLine) {
+	for curr := idx; curr >= 0 && curr < len(m.diffLines); curr -= dir {
+		if isDiffContentLine(stripAnsi(m.diffLines[curr])) {
 			return curr
 		}
-		curr -= dir
 	}
 
 	return m.diffCursor
@@ -448,8 +388,6 @@ func (m *Model) handleScrolling() {
 		m.setYOffset(m.diffCursor)
 		return
 	}
-	// Count visual rows from YOffset through diffCursor.
-	// If they exceed the effective content height the cursor is off-screen below.
 	h := m.diffContentHeight()
 	visualRows := 0
 	for i := m.diffViewport.YOffset; i <= m.diffCursor; i++ {
@@ -461,8 +399,7 @@ func (m *Model) handleScrolling() {
 }
 
 func (m *Model) centerDiffCursor() {
-	half := m.diffContentHeight() / 2
-	needed := half
+	needed := m.diffContentHeight() / 2
 	for i := m.diffCursor; i >= 0; i-- {
 		needed -= m.visualRowsForLine(i)
 		if needed <= 0 {
@@ -474,38 +411,18 @@ func (m *Model) centerDiffCursor() {
 }
 
 func (m *Model) updateSizes() {
-	reservedHeight := 2 // top bar + status bar
+	reservedHeight := 2
 	if m.showHelp {
 		reservedHeight += 7
 	}
-	if m.overlay != OverlayNone {
-		// overlay doesn't change the underlying size
-	}
 
-	contentHeight := m.height - reservedHeight
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
+	contentHeight := max(m.height-reservedHeight, 1)
+	treeWidth := max(int(float64(m.width)*0.22), 22)
+	treeInnerWidth := max(treeWidth-4, 10)
+	listHeight := max(contentHeight-2, 1)
 
-	treeWidth := int(float64(m.width) * 0.22)
-	if treeWidth < 22 {
-		treeWidth = 22
-	}
-
-	treePaneOverhead := 4
-	treeInnerWidth := treeWidth - treePaneOverhead
-	if treeInnerWidth < 10 {
-		treeInnerWidth = 10
-	}
-
-	listHeight := contentHeight - 2
-	if listHeight < 1 {
-		listHeight = 1
-	}
 	m.fileList.SetSize(treeInnerWidth, listHeight)
-
-	diffPaneWidth := m.width - treeWidth
-	m.diffViewport.Width = diffPaneWidth
+	m.diffViewport.Width = m.width - treeWidth
 	m.diffViewport.Height = listHeight
 }
 
@@ -517,7 +434,6 @@ func (m *Model) updateTreeFocus() {
 
 func (m *Model) refreshTreeItems() {
 	m.fileList.SetItems(m.treeState.Items(m.flatMode, m.computedStatuses))
-	// Re-select the current file
 	for i, item := range m.fileList.Items() {
 		if ti, ok := item.(tree.TreeItem); ok && ti.FullPath == m.selectedPath {
 			m.fileList.Select(i)
@@ -526,19 +442,15 @@ func (m *Model) refreshTreeItems() {
 	}
 }
 
-// diffRangeForFile returns the appropriate (from, to) range for a given file.
-// For "changed" files (approved but with new commits), shows only the delta.
 func (m *Model) diffRangeForFile(file string) (string, string) {
 	if m.computedStatuses[file] == review.StatusChanged {
-		approvedAt := m.reviewState.GetApprovedAtCommit(file)
-		if approvedAt != "" {
+		if approvedAt := m.reviewState.GetApprovedAtCommit(file); approvedAt != "" {
 			return approvedAt, "HEAD"
 		}
 	}
 	return m.from, m.to
 }
 
-// rebuildLineComments rebuilds the lineIndex→comment map for the current file.
 func (m *Model) rebuildLineComments() {
 	m.lineComments = make(map[int]*review.Comment)
 	if m.selectedPath == "" {
@@ -549,12 +461,21 @@ func (m *Model) rebuildLineComments() {
 	}
 }
 
-// saveReviewState persists state to disk, silently ignoring errors.
 func (m *Model) saveReviewState() {
 	_ = review.Save(m.gitDir, m.reviewState)
 }
 
-// findNextUnreviewedFile finds the next (or prev) file that needs review.
+func (m *Model) setFileStatus(status review.FileStatus, commit string) {
+	if m.selectedPath == "" || m.isDir() {
+		return
+	}
+	m.computedStatuses[m.selectedPath] = status
+	m.reviewState.SetFileStatus(m.selectedPath, status, commit)
+	m.saveReviewState()
+	m.updateTreeFocus()
+	m.refreshTreeItems()
+}
+
 func (m *Model) findNextUnreviewedFile(dir int) int {
 	items := m.fileList.Items()
 	currentIdx := m.fileList.Index()
@@ -576,13 +497,10 @@ func (m *Model) findNextUnreviewedFile(dir int) int {
 	return -1
 }
 
-// jumpToNextHunk moves cursor to the first content line after the next @@ hunk header.
 func (m *Model) jumpToNextHunk() {
 	for i := m.diffCursor + 1; i < len(m.diffLines); i++ {
-		clean := stripAnsi(m.diffLines[i])
-		if strings.HasPrefix(clean, "@@") {
-			newCursor := m.snapCursor(i+1, 1)
-			if newCursor != m.diffCursor {
+		if strings.HasPrefix(stripAnsi(m.diffLines[i]), "@@") {
+			if newCursor := m.snapCursor(i+1, 1); newCursor != m.diffCursor {
 				m.diffCursor = newCursor
 				m.handleScrolling()
 				return
@@ -591,21 +509,16 @@ func (m *Model) jumpToNextHunk() {
 	}
 }
 
-// jumpToPrevHunk moves cursor to the first content line after the preceding @@ header.
 func (m *Model) jumpToPrevHunk() {
-	// Find the @@ before current cursor
 	for i := m.diffCursor - 1; i >= 0; i-- {
-		clean := stripAnsi(m.diffLines[i])
-		if strings.HasPrefix(clean, "@@") {
-			newCursor := m.snapCursor(i+1, 1)
-			m.diffCursor = newCursor
+		if strings.HasPrefix(stripAnsi(m.diffLines[i]), "@@") {
+			m.diffCursor = m.snapCursor(i+1, 1)
 			m.handleScrolling()
 			return
 		}
 	}
 }
 
-// reviewSummary returns counts of files by status.
 func (m *Model) reviewSummary() (approved, changed, viewed, total int) {
 	for _, item := range m.fileList.Items() {
 		ti, ok := item.(tree.TreeItem)
