@@ -153,6 +153,11 @@ func (m Model) renderSplitDiff(contentHeight int) string {
 		sb.WriteString(leftStr + divider + rightStr + "\n")
 	}
 
+	content := strings.TrimRight(sb.String(), "\n")
+	if canvasBg := ansiColorBg(m.activeTheme.CanvasBg); canvasBg != "" {
+		content = injectBgAfterResets(content, canvasBg)
+	}
+
 	diffPaneStyle := PaneStyle
 	if m.focus == FocusDiff {
 		diffPaneStyle = FocusedPaneStyle
@@ -162,7 +167,7 @@ func (m Model) renderSplitDiff(contentHeight int) string {
 		Width(m.diffViewport.Width - 4).
 		Height(contentHeight - 2).
 		MaxHeight(contentHeight).
-		Render("\n" + strings.TrimRight(sb.String(), "\n"))
+		Render("\n" + content)
 }
 
 func padRight(s string, width int) string {

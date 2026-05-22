@@ -30,6 +30,7 @@ type Theme struct {
 	SearchBg lipgloss.Color
 	SearchFg lipgloss.Color
 
+	CanvasBg      lipgloss.Color
 	BorderNormal  lipgloss.Color
 	BorderFocused lipgloss.Color
 	TopBarBg      lipgloss.Color
@@ -116,11 +117,13 @@ func InitStyles(t Theme) {
 	PaneStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.BorderNormal).
+		Background(t.CanvasBg).
 		Padding(0, 1)
 
 	FocusedPaneStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.BorderFocused).
+		Background(t.CanvasBg).
 		Padding(0, 1)
 
 	TopBarStyle = lipgloss.NewStyle().
@@ -130,14 +133,17 @@ func InitStyles(t Theme) {
 
 	TopInfoStyle = lipgloss.NewStyle().
 		Bold(true).
-		Padding(0, 1)
+		Padding(0, 1).
+		Background(t.TopBarBg)
 
 	TopStatsAddedStyle = lipgloss.NewStyle().
 		Foreground(t.StatsAdded).
+		Background(t.TopBarBg).
 		PaddingLeft(1)
 
 	TopStatsDeletedStyle = lipgloss.NewStyle().
 		Foreground(t.StatsDeleted).
+		Background(t.TopBarBg).
 		PaddingLeft(1).
 		PaddingRight(1)
 
@@ -147,13 +153,14 @@ func InitStyles(t Theme) {
 	DiffStyle = lipgloss.NewStyle().Padding(0, 0)
 	LineNumberStyle = lipgloss.NewStyle().
 		Foreground(t.LineNumberFg).
+		Background(t.CanvasBg).
 		Width(4).
 		Align(lipgloss.Right).
 		MarginRight(1)
 
 	DiffAddGutter = lipgloss.NewStyle().Foreground(t.GutterAdd).Bold(true)
 	DiffDelGutter = lipgloss.NewStyle().Foreground(t.GutterDel).Bold(true)
-	DiffCtxGutter = lipgloss.NewStyle().Foreground(t.GutterCtx)
+	DiffCtxGutter = lipgloss.NewStyle().Foreground(t.GutterCtx).Background(t.CanvasBg)
 
 	DiffAddLineStyle = lipgloss.NewStyle().Background(t.AddBg)
 	DiffDelLineStyle = lipgloss.NewStyle().Background(t.DelBg)
@@ -228,10 +235,12 @@ func InitStyles(t Theme) {
 	HelpDrawerStyle = lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), true, false, false, false).
 		BorderForeground(t.BorderNormal).
+		Background(t.TopBarBg).
 		Padding(1, 2)
 
 	HelpTextStyle = lipgloss.NewStyle().
 		Foreground(t.DimText).
+		Background(t.TopBarBg).
 		MarginRight(2)
 
 	EmptyLogoStyle = lipgloss.NewStyle().
@@ -262,6 +271,7 @@ func InitStyles(t Theme) {
 
 	OverlayTitle = lipgloss.NewStyle().
 		Foreground(t.BrightText).
+		Background(t.TopBarBg).
 		Bold(true).
 		MarginBottom(1)
 }

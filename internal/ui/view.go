@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -29,10 +30,7 @@ func (m Model) View() string {
 		bottomBar = m.viewStatusBar()
 	}
 
-	contentHeight := m.height - lipgloss.Height(topBar) - lipgloss.Height(bottomBar)
-	if contentHeight < 0 {
-		contentHeight = 0
-	}
+	contentHeight := max(0, m.height-lipgloss.Height(topBar)-lipgloss.Height(bottomBar))
 
 	var mainContent string
 	if len(m.fileList.Items()) == 0 {
@@ -43,10 +41,10 @@ func (m Model) View() string {
 			treeStyle = FocusedPaneStyle
 		}
 
-		treeView := treeStyle.Copy().
+		treeView := treeStyle.
 			Width(m.fileList.Width()).
-		Height(contentHeight - 2).
-		MaxHeight(contentHeight).
+			Height(contentHeight - 2).
+			MaxHeight(contentHeight).
 			Render(m.fileList.View())
 
 		var rightPaneView string
@@ -60,7 +58,8 @@ func (m Model) View() string {
 			rightPaneView = m.renderUnifiedDiff(contentHeight)
 		}
 
-		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, treeView, rightPaneView)
+		scrollbar := m.renderDiffScrollbar(contentHeight)
+		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, treeView, rightPaneView, scrollbar)
 	}
 
 	base := lipgloss.JoinVertical(lipgloss.Top, topBar, mainContent, bottomBar)
@@ -73,6 +72,54 @@ func (m Model) View() string {
 	}
 
 	return base
+}
+
+func (m Model) renderDiffScrollbar(height int) string {
+	trackStyle := lipgloss.NewStyle().Foreground(m.activeTheme.BorderNormal)
+	thumbStyle := lipgloss.NewStyle().Foreground(m.activeTheme.AccentText)
+
+	lines := make([]string, height)
+	lines[0] = " "
+	if height > 1 {
+		lines[height-1] = " "
+	}
+
+	barH := height - 2
+	if barH <= 0 || len(m.diffLines) == 0 {
+		for i := 1; i < height-1; i++ {
+			lines[i] = trackStyle.Render("╎")
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	total := len(m.diffLines)
+	var offset, viewportH int
+	if m.splitView {
+		offset = m.splitOffset
+		viewportH = m.diffViewport.Height
+	} else {
+		offset = m.diffViewport.YOffset
+		viewportH = m.diffContentHeight()
+	}
+
+	if total <= viewportH {
+		for i := 1; i < height-1; i++ {
+			lines[i] = trackStyle.Render("╎")
+		}
+	} else {
+		thumbH := max(1, barH*viewportH/total)
+		maxOff := barH - thumbH
+		thumbOff := max(0, min(maxOff*offset/(total-viewportH), maxOff))
+		for i := range barH {
+			if i >= thumbOff && i < thumbOff+thumbH {
+				lines[i+1] = thumbStyle.Render("█")
+			} else {
+				lines[i+1] = trackStyle.Render("╎")
+			}
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderUnifiedDiff(contentHeight int) string {
@@ -92,10 +139,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 	// lineNum(5) + gutter(4) = 9 chars overhead for numbered lines.
 	// So codeMaxW = diffViewport.Width-4-9 = diffViewport.Width-13.
 	// maxLineWidth = codeMaxW+4 (gutter) = diffViewport.Width-9.
-	maxLineWidth := m.diffViewport.Width - 9
-	if maxLineWidth < 1 {
-		maxLineWidth = 1
-	}
+	maxLineWidth := max(1, m.diffViewport.Width-9)
 
 	lineNumMode := m.cfg.UI.LineNumbers
 
@@ -118,10 +162,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 		}
 	}
 
-	codeMaxW := maxLineWidth - 4 // 4-char gutter: "+ │ "
-	if codeMaxW < 1 {
-		codeMaxW = 1
-	}
+	codeMaxW := max(1, maxLineWidth-4) // 4-char gutter: "+ │ "
 
 	contGutter := DiffCtxGutter.Render("  │ ")
 
@@ -182,13 +223,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 		}
 
 		// Search highlight
-		isSearchMatch := false
-		for _, mi := range m.searchMatches {
-			if mi == i {
-				isSearchMatch = true
-				break
-			}
-		}
+		isSearchMatch := slices.Contains(m.searchMatches, i)
 
 		separator := "│"
 		if isCursor {
@@ -225,6 +260,12 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 		if numStr != "" {
 			lineNumRendered = LineNumberStyle.Render(numStr)
 			lineNumPad = strings.Repeat(" ", lipgloss.Width(lineNumRendered))
+		} else if isDel && (lineNumMode == "absolute" || (lineNumMode == "hybrid" && isCursor)) {
+			// Deleted lines have no new-file line number — pad with spaces matching
+			// the width of the nearby line number so the code column stays aligned.
+			padW := lipgloss.Width(LineNumberStyle.Render(fmt.Sprintf("%d", fileLineNo)))
+			lineNumRendered = strings.Repeat(" ", padW)
+			lineNumPad = lineNumRendered
 		}
 
 		// Wrap code content into visual rows.
@@ -307,7 +348,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 				line = gutterStr + code + bg + pad + "\x1b[0m"
 
 			} else {
-				// Context line: syntax highlighting, no background.
+				// Context line: syntax highlighting, explicit canvas-bg fill to full width.
 				var gutterStr string
 				if isFirstRow {
 					gutterStr = DiffCtxGutter.Render("  " + separator + " ")
@@ -322,7 +363,9 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 				} else {
 					hlCode = rowContent
 				}
-				line = gutterStr + hlCode
+				ctxPad := strings.Repeat(" ", max(0, codeMaxW-lipgloss.Width(rowContent)))
+				ctxBg := ansiColorBg(m.activeTheme.CanvasBg)
+				line = gutterStr + hlCode + ctxBg + ctxPad + "\x1b[0m"
 			}
 
 			if isFirstRow {
@@ -357,12 +400,31 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 		diffContentStr = headerStr + "\n" + diffContentStr
 	}
 
+	// Enforce canvas background: re-apply after every ANSI reset, then explicitly
+	// pad each line to the full inner width and fill any empty rows so the
+	// terminal's background color cannot show through anywhere in the pane.
+	if canvasBgSeq := ansiColorBg(m.activeTheme.CanvasBg); canvasBgSeq != "" {
+		diffContentStr = injectBgAfterResets(diffContentStr, canvasBgSeq)
+		innerW := max(1, m.diffViewport.Width-4)
+		targetH := max(1, contentHeight-2)
+		lines := strings.Split(diffContentStr, "\n")
+		for i, l := range lines {
+			if w := lipgloss.Width(l); w < innerW {
+				lines[i] = l + canvasBgSeq + strings.Repeat(" ", innerW-w) + "\x1b[0m"
+			}
+		}
+		for len(lines) < targetH {
+			lines = append(lines, canvasBgSeq+strings.Repeat(" ", innerW)+"\x1b[0m")
+		}
+		diffContentStr = strings.Join(lines, "\n")
+	}
+
 	diffPaneStyle := PaneStyle
 	if m.focus == FocusDiff {
 		diffPaneStyle = FocusedPaneStyle
 	}
 
-	return diffPaneStyle.Copy().
+	return diffPaneStyle.
 		Width(m.diffViewport.Width - 4).
 		Height(contentHeight - 2).
 		MaxHeight(contentHeight).
@@ -370,17 +432,17 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 }
 
 func (m Model) renderTopBar() string {
-	// Left: repo, branch, range
-	info := fmt.Sprintf(" %s  %s → %s", m.repoName, m.currentBranch, m.rangeLabel)
+	// Left: repo + range (rangeLabel already contains branch info for default mode)
+	info := fmt.Sprintf(" %s  %s", m.repoName, m.rangeLabel)
 	leftSide := TopInfoStyle.Render(info)
 
 	sep := TopInfoStyle.Render(" · ")
 
-	// Stats counts
+	// Review counts
 	approved, changed, _, total := m.reviewSummary()
 	reviewInfo := ""
 	if total > 0 {
-		reviewInfo = sep + TopInfoStyle.Render(fmt.Sprintf("✓%d  !%d  ○%d/%d", approved, changed, total-approved-changed, total))
+		reviewInfo = sep + TopInfoStyle.Render(fmt.Sprintf("✓%d  !%d  ○ %d/%d", approved, changed, total-approved-changed, total))
 	}
 
 	statsStr := ""
@@ -390,7 +452,36 @@ func (m Model) renderTopBar() string {
 			TopStatsDeletedStyle.Render(fmt.Sprintf("-%d", m.statsDeleted))
 	}
 
-	themeLabel := sep + StatusKeyStyle.Render("["+m.activeTheme.Name+"]")
+	modeLabel := ""
+	if m.isDirtyMode {
+		modeLabel = sep + lipgloss.NewStyle().
+			Foreground(m.activeTheme.StatusChanged).
+			Background(m.activeTheme.TopBarBg).
+			Render("[dirty]")
+	} else {
+		activeTabStyle := lipgloss.NewStyle().
+			Foreground(m.activeTheme.AccentText).
+			Background(m.activeTheme.TopBarBg).
+			Bold(true).
+			Padding(0, 1)
+		inactiveTabStyle := lipgloss.NewStyle().
+			Foreground(m.activeTheme.DimText).
+			Background(m.activeTheme.TopBarBg).
+			Padding(0, 1)
+		tabSepStyle := lipgloss.NewStyle().
+			Foreground(m.activeTheme.DimText).
+			Background(m.activeTheme.TopBarBg)
+
+		var tabNotApproved, tabAll string
+		if m.filterTab == FilterNotApproved {
+			tabNotApproved = activeTabStyle.Render("not approved")
+			tabAll = inactiveTabStyle.Render("all")
+		} else {
+			tabNotApproved = inactiveTabStyle.Render("not approved")
+			tabAll = activeTabStyle.Render("all")
+		}
+		modeLabel = sep + tabNotApproved + tabSepStyle.Render("·") + tabAll
+	}
 
 	// Right: current file + file stats
 	rightSide := ""
@@ -402,32 +493,35 @@ func (m Model) renderTopBar() string {
 
 		status := m.computedStatuses[sel.FullPath]
 		var statusLabel string
+		tbStatus := lipgloss.NewStyle().Background(m.activeTheme.TopBarBg)
 		switch status {
 		case review.StatusApproved:
-			statusLabel = "  " + StatusApprovedStyle.Render("[APPROVED]")
+			statusLabel = tbStatus.Foreground(m.activeTheme.StatusApproved).Render("  [APPROVED]")
 		case review.StatusChanged:
-			statusLabel = "  " + StatusChangedStyle.Render("[CHANGED]")
+			statusLabel = tbStatus.Foreground(m.activeTheme.StatusChanged).Render("  [CHANGED]")
 		case review.StatusViewed:
-			statusLabel = "  " + StatusViewedStyle.Render("[VIEWED]")
+			statusLabel = tbStatus.Foreground(m.activeTheme.StatusViewed).Render("  [VIEWED]")
 		}
 
-		leftW := lipgloss.Width(leftSide) + lipgloss.Width(statsStr) + lipgloss.Width(reviewInfo) + lipgloss.Width(themeLabel)
-		maxPathW := m.width - leftW - lipgloss.Width(fileStats) - lipgloss.Width(statusLabel) - 6
-		if maxPathW < 10 {
-			maxPathW = 10
+		leftW := lipgloss.Width(leftSide) + lipgloss.Width(statsStr) + lipgloss.Width(reviewInfo) + lipgloss.Width(modeLabel)
+		maxPathW := m.width - leftW - lipgloss.Width(fileStats) - lipgloss.Width(statusLabel) - 3
+		if maxPathW >= 4 {
+			fgStyle := lipgloss.NewStyle().Foreground(m.activeTheme.NormalText).Background(m.activeTheme.TopBarBg)
+			truncPath := fgStyle.Render(ansi.Truncate(sel.FullPath, maxPathW, "…"))
+			styledFileStats := ""
+			if fileStats != "" {
+				styledFileStats = fgStyle.Render(fileStats)
+			}
+			// trailing space gives the right side internal padding before the edge
+			rightSide = truncPath + styledFileStats + statusLabel + fgStyle.Render(" ")
 		}
-		truncPath := ansi.Truncate(sel.FullPath, maxPathW, "…")
-		rightSide = truncPath + fileStats + statusLabel
 	}
 
-	availWidth := m.width - lipgloss.Width(leftSide) - lipgloss.Width(statsStr) - lipgloss.Width(reviewInfo) - lipgloss.Width(themeLabel) - lipgloss.Width(rightSide)
-	if availWidth < 0 {
-		availWidth = 0
-	}
+	availWidth := max(0, m.width-lipgloss.Width(leftSide)-lipgloss.Width(statsStr)-lipgloss.Width(reviewInfo)-lipgloss.Width(modeLabel)-lipgloss.Width(rightSide))
 	padding := strings.Repeat(" ", availWidth)
 
 	finalBar := lipgloss.JoinHorizontal(lipgloss.Top,
-		leftSide, statsStr, reviewInfo, themeLabel, padding, rightSide)
+		leftSide, statsStr, reviewInfo, modeLabel, padding, rightSide)
 
 	return TopBarStyle.Width(m.width).Render(finalBar)
 }
@@ -452,10 +546,7 @@ func (m Model) viewStatusBar() string {
 				Render(fmt.Sprintf("[%d/%d]", idx, len(m.searchMatches)))
 		}
 		hint := StatusKeyStyle.Render("enter confirm  esc clear")
-		avail := m.width - lipgloss.Width(prompt) - lipgloss.Width(input) - lipgloss.Width(matchInfo) - lipgloss.Width(hint)
-		if avail < 0 {
-			avail = 0
-		}
+		avail := max(0, m.width-lipgloss.Width(prompt)-lipgloss.Width(input)-lipgloss.Width(matchInfo)-lipgloss.Width(hint))
 		pad := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", avail))
 		return StatusBarStyle.Width(m.width).Render(
 			lipgloss.JoinHorizontal(lipgloss.Top, prompt, input, matchInfo, pad, hint),
@@ -464,21 +555,15 @@ func (m Model) viewStatusBar() string {
 
 	if m.statusNotify != "" {
 		notify := StatusNotifyStyle.Render(m.statusNotify)
-		avail := m.width - lipgloss.Width(notify)
-		if avail < 0 {
-			avail = 0
-		}
+		avail := max(0, m.width-lipgloss.Width(notify))
 		pad := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", avail))
 		return StatusBarStyle.Width(m.width).Render(
 			lipgloss.JoinHorizontal(lipgloss.Top, notify, pad),
 		)
 	}
 
-	shortcuts := StatusKeyStyle.Render("?help  q quit  Tab switch  a approve  c comment  E export  s split  t theme  F fzf")
-	avail := m.width - lipgloss.Width(shortcuts)
-	if avail < 0 {
-		avail = 0
-	}
+	shortcuts := StatusKeyStyle.Render("?help  q quit  Tab focus  a approve  c comment  E export  s split  t theme  v toggle all  b range  F fuzzy")
+	avail := max(0, m.width-lipgloss.Width(shortcuts))
 	pad := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", avail))
 	return StatusBarStyle.Width(m.width).Render(
 		lipgloss.JoinHorizontal(lipgloss.Top, shortcuts, pad),
@@ -491,39 +576,41 @@ func (m Model) renderHelpDrawer() string {
 		HelpTextStyle.Render("↓/j    Move Down"),
 		HelpTextStyle.Render("gg/G   Top/Bottom"),
 		HelpTextStyle.Render("C-d/u  Page ½ Dn/Up"),
-		HelpTextStyle.Render("H/M/L  High/Mid/Low"),
+		HelpTextStyle.Render("H/M/L  Top/Mid/Bottom"),
 	)
 	col2 := lipgloss.JoinVertical(lipgloss.Left,
-		HelpTextStyle.Render("h/l    Switch Panel"),
-		HelpTextStyle.Render("Tab    Toggle Focus"),
+		HelpTextStyle.Render("h/l    Focus Left/Right"),
+		HelpTextStyle.Render("Tab    Toggle Panel"),
 		HelpTextStyle.Render("]c/[c  Next/Prev Hunk"),
-		HelpTextStyle.Render("zz/zt  Center/Top"),
+		HelpTextStyle.Render("zz/zt  Center/Top Cursor"),
 		HelpTextStyle.Render("e      Edit File"),
 	)
 	col3 := lipgloss.JoinVertical(lipgloss.Left,
 		HelpTextStyle.Render("a      Approve"),
-		HelpTextStyle.Render("u      Unreviewed"),
-		HelpTextStyle.Render("r      Reset file"),
-		HelpTextStyle.Render("R      Reset all"),
-		HelpTextStyle.Render("n/p    Next/Prev Todo"),
+		HelpTextStyle.Render("u      Mark Unreviewed"),
+		HelpTextStyle.Render("r      Reset File"),
+		HelpTextStyle.Render("R      Reset Review"),
+		HelpTextStyle.Render("n/p    Next/Prev Unreviewed"),
 	)
 	col4 := lipgloss.JoinVertical(lipgloss.Left,
 		HelpTextStyle.Render("c      Comment"),
-		HelpTextStyle.Render("d      Del Comment"),
+		HelpTextStyle.Render("d      Delete Comment"),
 		HelpTextStyle.Render("E      Export"),
 		HelpTextStyle.Render("s      Split View"),
-		HelpTextStyle.Render("t      Cycle Theme"),
+		HelpTextStyle.Render("t      Theme Picker"),
+		HelpTextStyle.Render("b      Change Range"),
 	)
 	col5 := lipgloss.JoinVertical(lipgloss.Left,
-		HelpTextStyle.Render("F      fzf Jump"),
+		HelpTextStyle.Render("F      Fuzzy Search"),
 		HelpTextStyle.Render("/      Search"),
-		HelpTextStyle.Render("f      Flat Mode"),
+		HelpTextStyle.Render("f      Toggle Flat View"),
+		HelpTextStyle.Render("v      Toggle View All"),
 		HelpTextStyle.Render("V      Visual Mode"),
 		HelpTextStyle.Render("?      Toggle Help"),
 	)
 
 	spacer := lipgloss.NewStyle().Width(4).Render("")
-	return HelpDrawerStyle.Copy().Width(m.width).Render(
+	return HelpDrawerStyle.Width(m.width).Render(
 		lipgloss.JoinHorizontal(lipgloss.Top,
 			col1, spacer, col2, spacer, col3, spacer, col4, spacer, col5,
 		),
@@ -557,23 +644,45 @@ func ansiColorFg(c lipgloss.Color) string {
 // injectBgAfterResets re-applies bgAnsi after every ANSI reset sequence so that
 // a background color persists through chroma's per-token reset codes.
 func injectBgAfterResets(s, bgAnsi string) string {
-	restore := "\x1b[39m\x1b[22m" + bgAnsi
+	restore := "\x1b[39m\x1b[22m\x1b[23m\x1b[24m\x1b[27m" + bgAnsi
 	s = strings.ReplaceAll(s, "\x1b[0m", restore)
 	s = strings.ReplaceAll(s, "\x1b[m", restore)
 	return bgAnsi + s
 }
 
-// wrapCodeRows splits content into visual rows of at most width columns,
-// preserving ANSI escape codes and leading whitespace (indentation).
+// wrapCodeRows splits content into visual rows of at most width columns.
+// Continuation rows are prefixed with the same leading whitespace as the first
+// row so wrapped lines stay visually indented at the correct level.
 func wrapCodeRows(content string, width int) []string {
 	if width <= 0 || lipgloss.Width(content) <= width {
 		return []string{content}
 	}
+
+	// Count leading spaces so continuation rows can re-indent.
+	indent := 0
+	for _, ch := range content {
+		if ch == ' ' {
+			indent++
+		} else {
+			break
+		}
+	}
+
 	wrapped := ansi.Hardwrap(content, width, true)
 	rows := strings.Split(wrapped, "\n")
 	if len(rows) == 0 {
 		return []string{content}
 	}
+
+	if indent > 0 {
+		prefix := strings.Repeat(" ", indent)
+		for i := 1; i < len(rows); i++ {
+			if rows[i] != "" {
+				rows[i] = prefix + rows[i]
+			}
+		}
+	}
+
 	return rows
 }
 
@@ -584,12 +693,12 @@ func (m Model) renderEmptyState(w, h int) string {
 	statusMsg := "No changes to review."
 	if len(m.fileList.Items()) == 0 {
 		switch m.to {
-		case "HEAD":
-			statusMsg = fmt.Sprintf("No uncommitted changes from %s — working tree is clean.", m.from[:min(len(m.from), 12)])
 		case "--cached":
 			statusMsg = "No staged changes — run 'git add' to stage files for review."
 		default:
-			statusMsg = fmt.Sprintf("No changes between %s and %s.", m.from[:min(len(m.from), 12)], m.to[:min(len(m.to), 12)])
+			fromLabel := m.prettyRef(m.from, "base")
+			toLabel := m.prettyRef(m.to, "head")
+			statusMsg = fmt.Sprintf("No changes between %s and %s.", fromLabel, toLabel)
 		}
 	}
 	status := EmptyStatusStyle.Render(statusMsg)

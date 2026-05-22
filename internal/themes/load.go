@@ -178,6 +178,7 @@ func fromBase16(f base16YAML) ui.Theme {
 		CommentBg:      hex(f.Base01),
 		SearchBg:       hex(f.Base0A),
 		SearchFg:       hex(f.Base00),
+		CanvasBg:       hex(f.Base00),
 		BorderNormal:   hex(f.Base02),
 		BorderFocused:  hex(f.Base0D),
 		TopBarBg:       hex(f.Base01),

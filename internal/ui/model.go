@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/YusufHosny/git-review/internal/config"
 	"github.com/YusufHosny/git-review/internal/git"
 	"github.com/YusufHosny/git-review/internal/review"
@@ -21,6 +22,13 @@ type Focus int
 const (
 	FocusTree Focus = iota
 	FocusDiff
+)
+
+type FilterTab int
+
+const (
+	FilterNotApproved FilterTab = iota
+	FilterAll
 )
 
 var ansiRe = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`)
@@ -53,6 +61,8 @@ type ExportDoneMsg struct {
 	Err  error
 }
 
+type notifyClearMsg struct{}
+
 type Model struct {
 	fileList     list.Model
 	treeState    *tree.FileTree
@@ -82,12 +92,13 @@ type Model struct {
 	splitOffset int
 	width, height int
 
-	gitClient     *git.Client
-	currentBranch string
-	repoName      string
-	headCommit    string
-	from, to      string
-	rangeLabel    string
+	gitClient      *git.Client
+	currentBranch  string
+	repoName       string
+	headCommit     string
+	from, to       string
+	rangeLabel     string
+	baseBranchName string
 
 	statsAdded, statsDeleted             int
 	currentFileAdded, currentFileDeleted int
@@ -97,6 +108,14 @@ type Model struct {
 	gitDir           string
 	computedStatuses map[string]review.FileStatus
 	lineComments     map[int]*review.Comment
+
+	isDirtyMode bool
+	filterTab   FilterTab
+
+	rangePickerFocus   int
+	rangePickerItems   []git.RefEntry
+	rangePickerBaseIdx int
+	rangePickerHeadIdx int
 
 	themeIndex        int
 	activeTheme       Theme
@@ -125,10 +144,12 @@ func NewModel(
 	cfg config.Config,
 	gitClient *git.Client,
 	from, to, rangeLabel string,
+	baseBranchName string,
 	reviewState *review.State,
 	gitDir string,
 	headCommit string,
 	themeIndex int,
+	isDirtyMode bool,
 ) Model {
 	theme := Themes[themeIndex%len(Themes)]
 	InitStyles(theme)
@@ -144,7 +165,7 @@ func NewModel(
 	}
 
 	t := tree.New(files)
-	items := t.Items(false, computed)
+	allItems := t.Items(false, computed)
 
 	ta := textarea.New()
 	ta.Placeholder = "Write your comment here..."
@@ -162,7 +183,7 @@ func NewModel(
 		ActiveTheme:  theme,
 	}
 
-	l := list.New(items, delegate, 0, 0)
+	l := list.New(allItems, delegate, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowHelp(false)
 	l.SetShowStatusBar(false)
@@ -182,6 +203,7 @@ func NewModel(
 		from:             from,
 		to:               to,
 		rangeLabel:       rangeLabel,
+		baseBranchName:   baseBranchName,
 		gitClient:        gitClient,
 		reviewState:      reviewState,
 		gitDir:           gitDir,
@@ -193,9 +215,13 @@ func NewModel(
 		commentInput:     ta,
 		searchInput:      si,
 		fileStats:        make(map[string][2]int),
+		isDirtyMode:      isDirtyMode,
+		filterTab:        FilterNotApproved,
 	}
 
-	for idx, item := range items {
+	// Apply filter and select the first visible file.
+	m.refreshTreeItems()
+	for idx, item := range m.fileList.Items() {
 		if ti, ok := item.(tree.TreeItem); ok && !ti.IsDir {
 			m.selectedPath = ti.FullPath
 			m.fileList.Select(idx)
@@ -203,6 +229,7 @@ func NewModel(
 		}
 	}
 
+	m.applyThemeToCommentInput()
 	return m
 }
 
@@ -215,7 +242,9 @@ func (m Model) Init() tea.Cmd {
 	}
 
 	cmds = append(cmds, m.fetchStatsCmd())
-	cmds = append(cmds, m.checkAllApprovedFilesCmd())
+	if !m.isDirtyMode {
+		cmds = append(cmds, m.checkAllApprovedFilesCmd())
+	}
 
 	return tea.Batch(cmds...)
 }
@@ -235,10 +264,17 @@ func (m Model) checkAllApprovedFilesCmd() tea.Cmd {
 	return func() tea.Msg {
 		var msgs []tea.Msg
 		for file, fs := range m.reviewState.Files {
-			if fs.Status == review.StatusApproved && fs.ApprovedAtCommit != "" {
-				changed := m.gitClient.HasChangedSince(fs.ApprovedAtCommit, file)
-				msgs = append(msgs, ChangeCheckMsg{File: file, Changed: changed})
+			if fs.Status != review.StatusApproved {
+				continue
 			}
+			var changed bool
+			if fs.ApprovedBlobHash != "" {
+				currentHash, err := m.gitClient.GetBlobHash(m.to, file)
+				changed = err != nil || currentHash != fs.ApprovedBlobHash
+			} else if fs.ApprovedAtCommit != "" {
+				changed = m.gitClient.HasChangedSince(fs.ApprovedAtCommit, file)
+			}
+			msgs = append(msgs, ChangeCheckMsg{File: file, Changed: changed})
 		}
 		return batchMsg(msgs)
 	}
@@ -422,7 +458,7 @@ func (m *Model) updateSizes() {
 	listHeight := max(contentHeight-2, 1)
 
 	m.fileList.SetSize(treeInnerWidth, listHeight)
-	m.diffViewport.Width = m.width - treeWidth
+	m.diffViewport.Width = m.width - treeWidth - 1
 	m.diffViewport.Height = listHeight
 }
 
@@ -432,14 +468,167 @@ func (m *Model) updateTreeFocus() {
 	m.fileList.SetDelegate(m.treeDelegate)
 }
 
+func (m *Model) buildFileListItems() []list.Item {
+	items := m.treeState.Items(m.flatMode, m.computedStatuses)
+	if m.filterTab == FilterAll {
+		return items
+	}
+
+	// Collect paths of files that should be visible.
+	activePaths := make(map[string]bool)
+	for _, item := range items {
+		ti, ok := item.(tree.TreeItem)
+		if !ok || ti.IsDir {
+			continue
+		}
+		status := m.computedStatuses[ti.FullPath]
+		// Include Viewed too — auto-view-on-navigate would otherwise make every
+		// file disappear from the list as the user scrolls past it.
+		if status == review.StatusUnreviewed || status == review.StatusChanged || status == review.StatusViewed {
+			activePaths[ti.FullPath] = true
+		}
+	}
+	// Always keep the currently selected file visible so it doesn't disappear
+	// while the user is on it — files are filtered out when navigating past them.
+	if m.selectedPath != "" {
+		activePaths[m.selectedPath] = true
+	}
+
+	var filtered []list.Item
+	for _, item := range items {
+		ti, ok := item.(tree.TreeItem)
+		if !ok {
+			filtered = append(filtered, item)
+			continue
+		}
+		if ti.IsDir {
+			// Only keep directory nodes that contain at least one active file.
+			dirPrefix := ti.FullPath + "/"
+			hasChild := false
+			for path := range activePaths {
+				if strings.HasPrefix(path, dirPrefix) {
+					hasChild = true
+					break
+				}
+			}
+			if hasChild {
+				filtered = append(filtered, item)
+			}
+		} else if activePaths[ti.FullPath] {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
 func (m *Model) refreshTreeItems() {
-	m.fileList.SetItems(m.treeState.Items(m.flatMode, m.computedStatuses))
+	m.fileList.SetItems(m.buildFileListItems())
 	for i, item := range m.fileList.Items() {
 		if ti, ok := item.(tree.TreeItem); ok && ti.FullPath == m.selectedPath {
 			m.fileList.Select(i)
 			break
 		}
 	}
+}
+
+// reloadRange switches to a new diff range, recomputing statuses using blob hashes.
+func (m *Model) reloadRange(from, to, label string) tea.Cmd {
+	m.from = from
+	m.to = to
+	m.rangeLabel = label
+	// If the new from is a branch name (not a raw SHA), use it as baseBranchName.
+	if len(from) != 40 {
+		m.baseBranchName = from
+	}
+
+	files, _ := m.gitClient.ListChangedFiles(from, to)
+
+	newComputed := make(map[string]review.FileStatus)
+	for _, f := range files {
+		newComputed[f] = review.StatusUnreviewed
+	}
+
+	for f, fs := range m.reviewState.Files {
+		if _, inRange := newComputed[f]; !inRange {
+			continue
+		}
+		if fs.Status == review.StatusApproved {
+			if fs.ApprovedBlobHash != "" {
+				currentHash, err := m.gitClient.GetBlobHash(to, f)
+				if err == nil && currentHash == fs.ApprovedBlobHash {
+					newComputed[f] = review.StatusApproved
+				} else {
+					newComputed[f] = review.StatusChanged
+				}
+			} else if fs.ApprovedAtCommit != "" {
+				if m.gitClient.HasChangedSince(fs.ApprovedAtCommit, f) {
+					newComputed[f] = review.StatusChanged
+				} else {
+					newComputed[f] = review.StatusApproved
+				}
+			}
+		} else if fs.Status != review.StatusUnreviewed {
+			newComputed[f] = fs.Status
+		}
+	}
+
+	m.computedStatuses = newComputed
+	m.treeState = tree.New(files)
+	m.updateTreeFocus()
+	m.refreshTreeItems()
+
+	m.reviewState.RangeFrom = from
+	m.reviewState.RangeTo = to
+
+	from2, to2 := m.diffRangeForFile(m.selectedPath)
+	m.currentFrom, m.currentTo = from2, to2
+
+	return tea.Batch(
+		m.gitClient.DiffCmd(from2, to2, m.selectedPath),
+		m.fetchStatsCmd(),
+	)
+}
+
+// prettyRef formats a git ref for human display.
+// role "base" → prefer "branchname (REVBASE)", role "head" → prefer "branchname (HEAD)".
+func (m *Model) prettyRef(ref, role string) string {
+	switch ref {
+	case "--cached":
+		return "index (staged)"
+	case "HEAD":
+		if role == "head" {
+			return m.currentBranch + " (HEAD)"
+		}
+		return m.currentBranch
+	}
+
+	// Matches current HEAD commit SHA.
+	if m.headCommit != "" && ref == m.headCommit {
+		return m.currentBranch + " (HEAD)"
+	}
+
+	// Full 40-char SHA.
+	if len(ref) == 40 {
+		short := ref[:8]
+		if role == "base" && m.baseBranchName != "" {
+			return m.baseBranchName + " (REVBASE)"
+		}
+		if role == "head" {
+			return m.currentBranch + " (HEAD)"
+		}
+		return short
+	}
+
+	// Already a readable ref (branch name, user-typed value, etc.).
+	switch role {
+	case "base":
+		if m.baseBranchName != "" {
+			return ref + " (REVBASE)"
+		}
+	case "head":
+		return ref + " (HEAD)"
+	}
+	return ref
 }
 
 func (m *Model) diffRangeForFile(file string) (string, string) {
@@ -461,20 +650,45 @@ func (m *Model) rebuildLineComments() {
 	}
 }
 
+func (m *Model) applyThemeToCommentInput() {
+	bg := m.activeTheme.TopBarBg
+	fg := m.activeTheme.NormalText
+	dim := m.activeTheme.DimText
+
+	base := lipgloss.NewStyle().Background(bg).Foreground(fg)
+	focused := textarea.Style{
+		Base:             base,
+		CursorLine:       lipgloss.NewStyle().Background(m.activeTheme.CursorCtxBg).Foreground(fg),
+		CursorLineNumber: base.Foreground(dim),
+		EndOfBuffer:      base.Foreground(dim),
+		LineNumber:       base.Foreground(dim),
+		Placeholder:      base.Foreground(dim),
+		Prompt:           base.Foreground(m.activeTheme.AccentText),
+		Text:             base,
+	}
+	blurred := textarea.Style{
+		Base:             base,
+		CursorLine:       base,
+		CursorLineNumber: base.Foreground(dim),
+		EndOfBuffer:      base.Foreground(dim),
+		LineNumber:       base.Foreground(dim),
+		Placeholder:      base.Foreground(dim),
+		Prompt:           base.Foreground(dim),
+		Text:             base.Foreground(dim),
+	}
+	m.commentInput.FocusedStyle = focused
+	m.commentInput.BlurredStyle = blurred
+	m.commentInput.Cursor.Style = lipgloss.NewStyle().Foreground(m.activeTheme.AccentText)
+	m.commentInput.Cursor.TextStyle = base
+}
+
 func (m *Model) saveReviewState() {
+	if m.isDirtyMode {
+		return
+	}
 	_ = review.Save(m.gitDir, m.reviewState)
 }
 
-func (m *Model) setFileStatus(status review.FileStatus, commit string) {
-	if m.selectedPath == "" || m.isDir() {
-		return
-	}
-	m.computedStatuses[m.selectedPath] = status
-	m.reviewState.SetFileStatus(m.selectedPath, status, commit)
-	m.saveReviewState()
-	m.updateTreeFocus()
-	m.refreshTreeItems()
-}
 
 func (m *Model) findNextUnreviewedFile(dir int) int {
 	items := m.fileList.Items()
@@ -520,13 +734,9 @@ func (m *Model) jumpToPrevHunk() {
 }
 
 func (m *Model) reviewSummary() (approved, changed, viewed, total int) {
-	for _, item := range m.fileList.Items() {
-		ti, ok := item.(tree.TreeItem)
-		if !ok || ti.IsDir {
-			continue
-		}
-		total++
-		switch m.computedStatuses[ti.FullPath] {
+	total = len(m.computedStatuses)
+	for _, status := range m.computedStatuses {
+		switch status {
 		case review.StatusApproved:
 			approved++
 		case review.StatusChanged:

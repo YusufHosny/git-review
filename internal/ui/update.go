@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/alecthomas/chroma/v2/quick"
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,6 +39,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.overlay == OverlayThemePicker {
 		return m.updateThemePicker(msg)
+	}
+	if m.overlay == OverlayRangePicker {
+		return m.updateRangePicker(msg)
 	}
 
 	// Handle search mode input
@@ -99,6 +103,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case notifyClearMsg:
+		m.statusNotify = ""
+
 	case ExportDoneMsg:
 		if msg.Err != nil {
 			m.statusNotify = "Export failed: " + msg.Err.Error()
@@ -143,9 +150,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			bracket := m.pendingBracket
 			m.pendingBracket = 0
 			if m.focus == FocusDiff && msg.String() == "c" {
-				if bracket == ']' {
+				switch bracket {
+				case ']':
 					m.jumpToNextHunk()
-				} else if bracket == '[' {
+				case '[':
 					m.jumpToPrevHunk()
 				}
 			}
@@ -250,13 +258,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			if m.focus == FocusTree {
 				m.flatMode = !m.flatMode
-				m.fileList.SetItems(m.treeState.Items(m.flatMode, m.computedStatuses))
-				for i, item := range m.fileList.Items() {
-					if ti, ok := item.(tree.TreeItem); ok && ti.FullPath == m.selectedPath {
-						m.fileList.Select(i)
-						break
-					}
-				}
+				m.refreshTreeItems()
 			}
 			m.inputBuffer = ""
 
@@ -266,7 +268,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == FocusTree && msg.String() == "enter" {
 				if i, ok := m.fileList.SelectedItem().(tree.TreeItem); ok && i.IsDir {
 					m.treeState.ToggleExpand(i.FullPath)
-					m.fileList.SetItems(m.treeState.Items(m.flatMode, m.computedStatuses))
+					m.refreshTreeItems()
 					return m, nil
 				}
 			}
@@ -368,6 +370,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.inputBuffer = ""
 
+		case "J":
+			keyHandled = true
+			count := m.getRepeatCount() * 2
+			for range count {
+				if m.focus == FocusDiff {
+					if m.splitView {
+						m.splitOffset++
+					} else {
+						m.diffCursor = m.snapCursor(m.diffCursor+1, 1)
+						m.handleScrolling()
+					}
+				} else {
+					m.fileList.CursorDown()
+				}
+			}
+			m.inputBuffer = ""
+
+		case "K":
+			keyHandled = true
+			count := m.getRepeatCount() * 2
+			for range count {
+				if m.focus == FocusDiff {
+					if m.splitView {
+						if m.splitOffset > 0 {
+							m.splitOffset--
+						}
+					} else {
+						m.diffCursor = m.snapCursor(m.diffCursor-1, -1)
+						m.handleScrolling()
+					}
+				} else {
+					m.fileList.CursorUp()
+				}
+			}
+			m.inputBuffer = ""
+
 		case "g":
 			if m.focus == FocusDiff {
 				if m.inputBuffer == "g" {
@@ -395,8 +433,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// === Review actions ===
 		case "a":
 			if m.selectedPath != "" && !m.isDir() {
+				blobHash, _ := m.gitClient.GetBlobHash(m.to, m.selectedPath)
 				m.computedStatuses[m.selectedPath] = review.StatusApproved
-				m.reviewState.SetFileStatus(m.selectedPath, review.StatusApproved, m.headCommit)
+				m.reviewState.SetFileStatus(m.selectedPath, review.StatusApproved, m.headCommit, blobHash)
 				m.saveReviewState()
 				m.updateTreeFocus()
 				m.refreshTreeItems()
@@ -526,6 +565,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchMatches = nil
 				m.searchCursor = 0
 			}
+
+		// === Filter toggle: cycle between not-approved-only and all files ===
+		case "v":
+			if m.filterTab == FilterNotApproved {
+				m.filterTab = FilterAll
+				m.statusNotify = "Tab: All Changes"
+			} else {
+				m.filterTab = FilterNotApproved
+				m.statusNotify = "Tab: Not Approved Only"
+			}
+			m.refreshTreeItems()
+			cmds = append(cmds, clearNotifyCmd())
+			m.inputBuffer = ""
+
+		// === Range picker ===
+		case "b":
+			if !m.isDirtyMode {
+				commits, _ := m.gitClient.ListBranchesAndCommits(30)
+
+				// Prepend current base and head as named entries at the top.
+				fromDisplay := m.prettyRef(m.from, "base")
+				toDisplay := m.prettyRef(m.to, "head")
+				special := []git.RefEntry{
+					{Ref: m.from, FullSHA: m.from, Display: fromDisplay},
+					{Ref: m.to, FullSHA: m.to, Display: toDisplay},
+				}
+				// Deduplicate: skip commits already represented by the special entries.
+				for _, c := range commits {
+					if c.FullSHA != m.from && c.FullSHA != m.to &&
+						c.Ref != m.from && c.Ref != m.to {
+						special = append(special, c)
+					}
+				}
+
+				m.rangePickerItems = special
+				m.rangePickerFocus = 0
+				m.rangePickerBaseIdx = 0
+				m.rangePickerHeadIdx = 1
+				m.overlay = OverlayRangePicker
+			}
+			m.inputBuffer = ""
 
 		default:
 			m.inputBuffer = ""
@@ -731,6 +811,7 @@ func (m Model) updateThemePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			InitStyles(m.activeTheme)
 			m.treeDelegate.ActiveTheme = m.activeTheme
 			m.fileList.SetDelegate(m.treeDelegate)
+			m.applyThemeToCommentInput()
 			m.overlay = OverlayNone
 			go config.SaveTheme(m.activeTheme.Name) //nolint:errcheck
 		}
@@ -890,6 +971,56 @@ func (m Model) exportCmd() tea.Cmd {
 	}
 }
 
+// === Range picker handler ===
+
+func (m Model) updateRangePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc", "q":
+			m.overlay = OverlayNone
+		case "tab", "h", "l", "left", "right":
+			m.rangePickerFocus = 1 - m.rangePickerFocus
+		case "j", "down":
+			n := len(m.rangePickerItems)
+			if n == 0 {
+				break
+			}
+			if m.rangePickerFocus == 0 {
+				m.rangePickerBaseIdx = (m.rangePickerBaseIdx + 1) % n
+			} else {
+				m.rangePickerHeadIdx = (m.rangePickerHeadIdx + 1) % n
+			}
+		case "k", "up":
+			n := len(m.rangePickerItems)
+			if n == 0 {
+				break
+			}
+			if m.rangePickerFocus == 0 {
+				m.rangePickerBaseIdx = (m.rangePickerBaseIdx - 1 + n) % n
+			} else {
+				m.rangePickerHeadIdx = (m.rangePickerHeadIdx - 1 + n) % n
+			}
+		case "enter", " ":
+			if len(m.rangePickerItems) == 0 {
+				m.overlay = OverlayNone
+				break
+			}
+			newFrom := m.rangePickerItems[m.rangePickerBaseIdx].Ref
+			newTo := m.rangePickerItems[m.rangePickerHeadIdx].Ref
+			newLabel := newFrom + ".." + newTo
+			m.overlay = OverlayNone
+			cmd := m.reloadRange(newFrom, newTo, newLabel)
+			return m, cmd
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateSizes()
+	}
+	return m, nil
+}
+
 // === Helpers ===
 
 func (m *Model) isDir() bool {
@@ -899,9 +1030,9 @@ func (m *Model) isDir() bool {
 	return false
 }
 
-// clearNotifyCmd returns a no-op command; the notify is cleared on next relevant event.
-// For now we rely on next keypress or esc to clear.
 func clearNotifyCmd() tea.Cmd {
-	// Notification persists until next key press — cleared in esc handler.
-	return nil
+	return func() tea.Msg {
+		time.Sleep(3 * time.Second)
+		return notifyClearMsg{}
+	}
 }

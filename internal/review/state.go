@@ -52,13 +52,16 @@ func Save(gitDir string, s *State) error {
 	return os.WriteFile(statePath(gitDir, s.Branch), data, 0644)
 }
 
-func (s *State) SetFileStatus(file string, status FileStatus, headCommit string) {
+func (s *State) SetFileStatus(file string, status FileStatus, headCommit string, blobHash ...string) {
 	if _, ok := s.Files[file]; !ok {
 		s.Files[file] = &FileState{}
 	}
 	s.Files[file].Status = status
 	if status == StatusApproved {
 		s.Files[file].ApprovedAtCommit = headCommit
+		if len(blobHash) > 0 {
+			s.Files[file].ApprovedBlobHash = blobHash[0]
+		}
 	}
 }
 

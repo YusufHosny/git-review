@@ -14,6 +14,7 @@ const (
 type FileState struct {
 	Status           FileStatus `json:"status"`
 	ApprovedAtCommit string     `json:"approved_at_commit,omitempty"`
+	ApprovedBlobHash string     `json:"approved_blob_hash,omitempty"`
 }
 
 type Comment struct {

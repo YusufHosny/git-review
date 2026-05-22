@@ -241,6 +241,121 @@ func (c *Client) DiffStatsByFile(from, to string) (map[string][2]int, error) {
 	return result, nil
 }
 
+func (c *Client) GetBlobHash(ref, path string) (string, error) {
+	var gitRef string
+	if ref == "--cached" {
+		gitRef = ":" + path
+	} else {
+		gitRef = ref + ":" + path
+	}
+	out, err := c.gitCmd("rev-parse", gitRef).Output()
+	if err != nil {
+		return "", fmt.Errorf("blob hash %s:%s: %w", ref, path, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// RefEntry represents a git ref (branch or commit) for display in the range picker.
+type RefEntry struct {
+	FullSHA  string
+	ShortSHA string
+	Ref      string // branch name if available, else full SHA
+	Display  string
+	IsBranch bool
+	IsHead   bool
+}
+
+// ListBranchesAndCommits returns branches (by name) followed by recent commits not
+// already represented by a branch tip, decorated with branch names and HEAD indicator.
+func (c *Client) ListBranchesAndCommits(n int) ([]RefEntry, error) {
+	seen := make(map[string]bool)
+	var entries []RefEntry
+
+	headSHA, _ := c.ResolveRef("HEAD")
+
+	branchOut, _ := c.gitCmd("branch", "--format=%(refname:short)%09%(objectname)").Output()
+	for _, line := range strings.Split(strings.TrimSpace(string(branchOut)), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "\t", 2)
+		if len(parts) != 2 || parts[0] == "" {
+			continue
+		}
+		name, sha := parts[0], parts[1]
+		if len(sha) > 7 {
+			sha = sha[:7] + sha[7:] // keep full but short display below
+		}
+		shortSHA := sha
+		if len(sha) > 7 {
+			shortSHA = sha[:7]
+		}
+		isHead := sha == headSHA || shortSHA == headSHA[:min(7, len(headSHA))]
+		display := name + " (" + shortSHA + ")"
+		if isHead {
+			display += " (HEAD)"
+		}
+		entries = append(entries, RefEntry{
+			FullSHA:  sha,
+			ShortSHA: shortSHA,
+			Ref:      name,
+			Display:  display,
+			IsBranch: true,
+			IsHead:   isHead,
+		})
+		seen[sha] = true
+		seen[shortSHA] = true
+	}
+
+	logOut, err := c.gitCmd("log", fmt.Sprintf("-n%d", n), "--format=%H%x00%h%x00%D").Output()
+	if err != nil {
+		return entries, nil
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(logOut)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x00", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		fullSHA := strings.TrimSpace(parts[0])
+		shortSHA := strings.TrimSpace(parts[1])
+		if seen[fullSHA] || seen[shortSHA] {
+			continue
+		}
+		seen[fullSHA] = true
+
+		isHead := fullSHA == headSHA
+		decor := ""
+		if len(parts) == 3 {
+			decor = strings.TrimSpace(parts[2])
+			if strings.HasPrefix(decor, "HEAD -> ") {
+				isHead = true
+				decor = decor[8:]
+			} else if decor == "HEAD" {
+				isHead = true
+				decor = ""
+			}
+		}
+
+		display := shortSHA
+		if decor != "" {
+			display += " (" + decor + ")"
+		}
+		if isHead {
+			display += " (HEAD)"
+		}
+
+		entries = append(entries, RefEntry{
+			FullSHA:  fullSHA,
+			ShortSHA: shortSHA,
+			Ref:      fullSHA,
+			Display:  display,
+			IsHead:   isHead,
+		})
+	}
+
+	return entries, nil
+}
+
 func (c *Client) HasChangedSince(commitSHA, path string) bool {
 	out, err := c.gitCmd("diff", "--name-only", commitSHA, "--", path).Output()
 	if err != nil {

@@ -33,31 +33,31 @@ func (d TreeDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 
 	title := i.Title()
 	maxWidth := m.Width() - 2
-	if maxWidth < 4 {
-		maxWidth = 4
-	}
+	maxWidth = max(maxWidth, 4)
 	title = ansi.Truncate(title, maxWidth, "…")
 
 	isSelected := index == m.Index()
 	status := d.FileStatuses[i.FullPath]
 
 	if isSelected {
-		style := lipgloss.NewStyle().
-			Background(lipgloss.Color("237")).
-			Foreground(lipgloss.Color("255")).
-			Bold(true).
-			Width(maxWidth)
+		bg := d.ActiveTheme.CursorCtxBg
+		fg := d.ActiveTheme.BrightText
 		if !d.Focused {
-			style = style.Foreground(lipgloss.Color("245"))
+			bg = d.ActiveTheme.BorderNormal
+			fg = d.ActiveTheme.NormalText
 		}
+		style := lipgloss.NewStyle().
+			Background(bg).
+			Foreground(fg).
+			Bold(d.Focused).
+			Width(maxWidth)
 		fmt.Fprint(w, style.Render(title))
 		return
 	}
 
-	// Apply per-status color to the status icon part
 	var fg lipgloss.Color
 	if i.IsDir {
-		fg = lipgloss.Color("99")
+		fg = d.ActiveTheme.AccentText2
 	} else {
 		switch status {
 		case review.StatusApproved:
@@ -73,6 +73,7 @@ func (d TreeDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 
 	style := lipgloss.NewStyle().
 		Foreground(fg).
+		Background(d.ActiveTheme.CanvasBg).
 		Width(maxWidth)
 	fmt.Fprint(w, style.Render(title))
 }

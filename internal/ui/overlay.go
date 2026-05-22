@@ -15,6 +15,7 @@ const (
 	OverlayConfirm
 	OverlayNotify
 	OverlayThemePicker
+	OverlayRangePicker
 )
 
 func (m Model) renderOverlay() string {
@@ -25,12 +26,15 @@ func (m Model) renderOverlay() string {
 		return m.renderConfirmOverlay()
 	case OverlayThemePicker:
 		return m.renderThemePickerOverlay()
+	case OverlayRangePicker:
+		return m.renderRangePickerOverlay()
 	default:
 		return ""
 	}
 }
 
 func (m Model) renderCommentOverlay() string {
+	bg := ansiColorBg(m.activeTheme.TopBarBg)
 	title := OverlayTitle.Render("Add Comment")
 	hint := HelpTextStyle.Render("ctrl+s save  esc cancel")
 
@@ -51,17 +55,19 @@ func (m Model) renderCommentOverlay() string {
 		"",
 		hint,
 	)
-
+	inner = injectBgAfterResets(inner, bg)
 	return OverlayStyle.Width(max(m.width-8, 40)).Render(inner)
 }
 
 func (m Model) renderConfirmOverlay() string {
+	bg := ansiColorBg(m.activeTheme.TopBarBg)
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		OverlayTitle.Render("Confirm"),
 		lipgloss.NewStyle().Foreground(ColorText).Render(m.confirmMsg),
 		"",
 		HelpTextStyle.Render("y confirm  n/esc cancel"),
 	)
+	inner = injectBgAfterResets(inner, bg)
 	return OverlayStyle.Width(max(m.width/2, 40)).Render(inner)
 }
 
@@ -99,7 +105,90 @@ func (m Model) renderThemePickerOverlay() string {
 
 	allRows := append([]string{OverlayTitle.Render("Select Theme"), ""}, rows...)
 	allRows = append(allRows, "", HelpTextStyle.Render("j/k move · enter apply · esc cancel"))
-	return OverlayStyle.Render(strings.Join(allRows, "\n"))
+	content := injectBgAfterResets(strings.Join(allRows, "\n"), bgSeq)
+	return OverlayStyle.Render(content)
+}
+
+func (m Model) renderRangePickerOverlay() string {
+	bg := m.activeTheme.TopBarBg
+	bgSeq := ansiColorBg(bg)
+
+	const visibleRows = 8
+	items := m.rangePickerItems
+
+	const displayW = 28
+	const colW = displayW + 2 // 2-char cursor prefix
+
+	renderPanel := func(title string, cursorIdx int, focused bool) string {
+		// Pad header to full column width so it aligns with separator and rows.
+		headerText := title
+		for len([]rune(headerText)) < colW {
+			headerText += " "
+		}
+		header := bgSeq + ansiColorFg(m.activeTheme.AccentText) + headerText + "\x1b[0m"
+		sep := bgSeq + ansiColorFg(m.activeTheme.DimText) + strings.Repeat("─", colW) + "\x1b[0m"
+
+		start := max(0, cursorIdx-visibleRows/2)
+		end := min(len(items), start+visibleRows)
+		if end-start < visibleRows {
+			start = max(0, end-visibleRows)
+		}
+
+		var rows []string
+		for i := start; i < end; i++ {
+			display := trimLine(items[i].Display, displayW)
+			for len([]rune(display)) < displayW {
+				display += " "
+			}
+			if i == cursorIdx {
+				if focused {
+					rows = append(rows, bgSeq+"\x1b[1m"+ansiColorFg(m.activeTheme.AccentText)+"> "+
+						ansiColorFg(m.activeTheme.BrightText)+display+"\x1b[0m")
+				} else {
+					rows = append(rows, bgSeq+ansiColorFg(m.activeTheme.DimText)+"· "+
+						ansiColorFg(m.activeTheme.NormalText)+display+"\x1b[0m")
+				}
+			} else {
+				rows = append(rows, bgSeq+ansiColorFg(m.activeTheme.NormalText)+"  "+display+"\x1b[0m")
+			}
+		}
+		for len(rows) < visibleRows {
+			rows = append(rows, bgSeq+strings.Repeat(" ", colW)+"\x1b[0m")
+		}
+
+		lines := append([]string{header, sep}, rows...)
+		return strings.Join(lines, "\n")
+	}
+
+	basePanel := renderPanel("Base", m.rangePickerBaseIdx, m.rangePickerFocus == 0)
+	headPanel := renderPanel("Head", m.rangePickerHeadIdx, m.rangePickerFocus == 1)
+
+	// Join panels side by side
+	baseLines := strings.Split(basePanel, "\n")
+	headLines := strings.Split(headPanel, "\n")
+	for len(baseLines) < len(headLines) {
+		baseLines = append(baseLines, "")
+	}
+	for len(headLines) < len(baseLines) {
+		headLines = append(headLines, "")
+	}
+
+	divider := bgSeq + ansiColorFg(m.activeTheme.DimText) + "  " + "\x1b[0m"
+	var combined []string
+	for i := range baseLines {
+		combined = append(combined, baseLines[i]+divider+headLines[i])
+	}
+
+	hint := HelpTextStyle.Render("h/l·tab switch · j/k move · Enter confirm · Esc cancel")
+	inner := lipgloss.JoinVertical(lipgloss.Left,
+		OverlayTitle.Render("Change Range"),
+		"",
+		strings.Join(combined, "\n"),
+		"",
+		hint,
+	)
+	inner = injectBgAfterResets(inner, bgSeq)
+	return OverlayStyle.Render(inner)
 }
 
 func placeOverlay(base, overlay string, baseW, baseH int) string {

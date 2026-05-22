@@ -17,32 +17,39 @@ import (
 var version = "0.1.0"
 
 func main() {
-	showVersion := flag.Bool("version", false, "Show version")
-	flag.BoolVar(showVersion, "v", false, "Show version (shorthand)")
+	showVersion := flag.Bool("version", false, "show version")
+	flag.BoolVar(showVersion, "v", false, "show version")
 
-	since := flag.String("since", "", "Diff from <ref> to HEAD")
-	flag.StringVar(since, "s", "", "Diff from <ref> to HEAD (shorthand)")
+	fromRef := flag.String("from", "", "diff from <ref> to HEAD")
+	flag.StringVar(fromRef, "f", "", "diff from <ref> to HEAD")
 
-	last := flag.Bool("last", false, "Diff HEAD~1..HEAD")
-	flag.BoolVar(last, "l", false, "Diff HEAD~1..HEAD (shorthand)")
+	dirty := flag.Bool("dirty", false, "dirty working tree vs HEAD")
+	flag.BoolVar(dirty, "d", false, "dirty working tree vs HEAD")
 
-	base := flag.String("base", "", "Override auto-detected base branch")
+	staged := flag.Bool("staged", false, "staged changes only vs HEAD")
+	flag.BoolVar(staged, "S", false, "staged changes only vs HEAD")
 
-	doReset := flag.Bool("reset", false, "Reset all review state for current branch (non-TUI)")
-	doExport := flag.String("export", "", "Export comments to markdown file (non-TUI)")
-	exportClip := flag.Bool("e", false, "Export comments to clipboard only (non-TUI)")
-	doStatus := flag.Bool("status", false, "Print review status summary (non-TUI)")
+	base := flag.String("base", "", "override auto-detected base branch")
+	flag.StringVar(base, "b", "", "override auto-detected base branch")
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: git review [flags] [ref1 [ref2]]\n\n")
-		fmt.Fprintf(os.Stderr, "Diff modes (default: branch vs merge-base):\n")
-		fmt.Fprintf(os.Stderr, "  git review                    Branch vs auto-detected base (like a PR)\n")
-		fmt.Fprintf(os.Stderr, "  git review -s <ref>           Changes since <ref>\n")
-		fmt.Fprintf(os.Stderr, "  git review -l                 Last commit (HEAD~1..HEAD)\n")
-		fmt.Fprintf(os.Stderr, "  git review <ref1> <ref2>      Between two refs\n")
-		fmt.Fprintf(os.Stderr, "  git review <ref1>..<ref2>     Between two refs (range notation)\n\n")
-		fmt.Fprintf(os.Stderr, "Flags:\n")
-		flag.PrintDefaults()
+	doReset := flag.Bool("reset", false, "reset review state for this branch")
+	flag.BoolVar(doReset, "r", false, "reset review state for this branch")
+
+	doExport := flag.String("export", "", "export comments to markdown file")
+	flag.StringVar(doExport, "e", "", "export comments to markdown file")
+
+	doStatus := flag.Bool("status", false, "print review status summary")
+
+	flag.Usage = printHelp
+
+	// Check for help before flag.Parse so printHelp can call flag.PrintDefaults().
+	// git intercepts --help for subcommands (man page lookup), so -help and
+	// 'git review help' are the workarounds.
+	for _, arg := range os.Args[1:] {
+		if arg == "--help" || arg == "-help" || arg == "help" {
+			printHelp()
+			os.Exit(0)
+		}
 	}
 
 	flag.Parse()
@@ -56,10 +63,21 @@ func main() {
 	ui.Themes = themes.LoadAll()
 	gitClient := &git.Client{}
 
-	from, to, rangeLabel, err := computeRange(gitClient, cfg, *since, *last, *base, flag.Args())
+	from, to, rangeLabel, baseBranchName, isDirty, err := computeRange(gitClient, cfg, *fromRef, *dirty, *staged, *base, flag.Args())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Default mode with no committed changes: fall back to dirty (working tree) view.
+	if !isDirty && *fromRef == "" && len(flag.Args()) == 0 {
+		if files, _ := gitClient.ListChangedFiles(from, to); len(files) == 0 {
+			from = "HEAD"
+			to = "HEAD"
+			rangeLabel = "dirty changes"
+			baseBranchName = ""
+			isDirty = true
+		}
 	}
 
 	gitDir := gitClient.GetGitDir()
@@ -96,29 +114,21 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *exportClip || *doExport != "" {
+	if *doExport != "" {
 		content := review.ExportMarkdown(reviewState, rangeLabel)
-		if *exportClip && *doExport == "" {
-			if err := review.CopyToClipboard(content); err != nil {
-				fmt.Fprintf(os.Stderr, "Error copying to clipboard: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Println("Copied to clipboard.")
-		} else {
-			if err := os.WriteFile(*doExport, []byte(content), 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "Error writing export: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Printf("Exported to %s\n", *doExport)
-			if err := review.CopyToClipboard(content); err == nil {
-				fmt.Println("(also copied to clipboard)")
-			}
+		if err := os.WriteFile(*doExport, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing export: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Exported to %s\n", *doExport)
+		if err := review.CopyToClipboard(content); err == nil {
+			fmt.Println("(also copied to clipboard)")
 		}
 		os.Exit(0)
 	}
 
 	p := tea.NewProgram(
-		ui.NewModel(cfg, gitClient, from, to, rangeLabel, reviewState, gitDir, headCommit, themeIndexForName(cfg.UI.Theme)),
+		ui.NewModel(cfg, gitClient, from, to, rangeLabel, baseBranchName, reviewState, gitDir, headCommit, themeIndexForName(cfg.UI.Theme), isDirty),
 		tea.WithAltScreen(),
 	)
 
@@ -134,66 +144,65 @@ const emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 func computeRange(
 	gitClient *git.Client,
 	cfg config.Config,
-	since string,
-	last bool,
+	fromFlag string,
+	dirty bool,
+	stagedOnly bool,
 	baseOverride string,
 	args []string,
-) (from, to, label string, err error) {
-	to = "HEAD"
-
+) (from, to, label, baseBranchName string, isDirty bool, err error) {
 	switch {
-	case last:
+	case dirty:
+		from = "HEAD"
+		to = "HEAD"
+		label = "dirty changes"
+		isDirty = true
+
+	case stagedOnly:
+		from = "HEAD"
+		to = "--cached"
+		label = "staged changes"
+		isDirty = true
+
+	case fromFlag != "":
+		resolved, resolveErr := gitClient.ResolveRef(fromFlag)
+		if resolveErr != nil {
+			return "", "", "", "", false, fmt.Errorf("cannot resolve ref %q: %w", fromFlag, resolveErr)
+		}
 		headSHA, resolveErr := gitClient.ResolveRef("HEAD")
 		if resolveErr != nil {
-			return "", "", "", fmt.Errorf("no commits yet — nothing to compare with HEAD~1")
-		}
-		to = headSHA
-		if _, resolveErr = gitClient.ResolveRef("HEAD~1"); resolveErr != nil {
-			from = emptyTreeSHA
-			label = "∅..HEAD"
-		} else {
-			from = "HEAD~1"
-			label = "HEAD~1..HEAD"
-		}
-
-	case since != "":
-		resolved, resolveErr := gitClient.ResolveRef(since)
-		if resolveErr != nil {
-			return "", "", "", fmt.Errorf("cannot resolve ref %q: %w", since, resolveErr)
-		}
-		to, resolveErr = gitClient.ResolveRef("HEAD")
-		if resolveErr != nil {
-			return "", "", "", fmt.Errorf("cannot resolve HEAD: %w", resolveErr)
+			return "", "", "", "", false, fmt.Errorf("cannot resolve HEAD: %w", resolveErr)
 		}
 		from = resolved
-		label = since + "..HEAD"
+		to = headSHA
+		label = fromFlag + "..HEAD"
+		baseBranchName = fromFlag
 
 	case len(args) == 1 && strings.Contains(args[0], ".."):
 		parts := strings.SplitN(args[0], "..", 2)
 		from = parts[0]
 		to = parts[1]
-		if to == "HEAD" {
-			if sha, e := gitClient.ResolveRef("HEAD"); e == nil {
-				to = sha
-			}
+		baseBranchName = parts[0] // preserve user input as readable label
+		if sha, e := gitClient.ResolveRef(to); e == nil {
+			to = sha
 		}
 		label = args[0]
 
 	case len(args) == 2:
 		from = args[0]
 		to = args[1]
+		baseBranchName = args[0]
 		label = from + ".." + to
-		if to == "HEAD" {
-			if sha, e := gitClient.ResolveRef("HEAD"); e == nil {
-				to = sha
-			}
+		if sha, e := gitClient.ResolveRef(to); e == nil {
+			to = sha
 		}
 
 	default:
-		if _, headErr := gitClient.ResolveRef("HEAD"); headErr != nil {
+		headSHA, headErr := gitClient.ResolveRef("HEAD")
+		if headErr != nil {
 			from = emptyTreeSHA
 			to = "--cached"
 			label = "staged changes"
+			isDirty = true
 			break
 		}
 		baseBranch := gitClient.AutoDetectBase(baseOverride)
@@ -205,10 +214,12 @@ func computeRange(
 			mergeBase = baseBranch
 		}
 		from = mergeBase
+		to = headSHA
+		baseBranchName = baseBranch
 		label = fmt.Sprintf("%s → %s", gitClient.GetCurrentBranch(), baseBranch)
 	}
 
-	return from, to, label, nil
+	return from, to, label, baseBranchName, isDirty, nil
 }
 
 func printStatus(s *review.State, rangeLabel string) {
@@ -232,6 +243,28 @@ func printStatus(s *review.State, rangeLabel string) {
 		}
 	}
 	fmt.Printf("\nTotal tracked: %d  Approved: %d  Viewed: %d\n", total, approved, viewed)
+}
+
+func printHelp() {
+	fmt.Fprintf(os.Stderr, "git-review %s\n\n", version)
+	fmt.Fprintf(os.Stderr, "Usage: git review [options] [ref1 [ref2]]\n\n")
+	fmt.Fprintf(os.Stderr, "Modes\n")
+	fmt.Fprintf(os.Stderr, "  git review                   branch vs auto-detected base (PR view)\n")
+	fmt.Fprintf(os.Stderr, "  git review -d                dirty working tree (staged + unstaged) vs HEAD\n")
+	fmt.Fprintf(os.Stderr, "  git review -S                staged changes only vs HEAD\n")
+	fmt.Fprintf(os.Stderr, "  git review -f <ref>          changes from <ref> to HEAD\n")
+	fmt.Fprintf(os.Stderr, "  git review <ref1> <ref2>     between two refs  (also: ref1..ref2)\n\n")
+	fmt.Fprintf(os.Stderr, "Diff options\n")
+	fmt.Fprintf(os.Stderr, "  -d, --dirty            dirty working tree vs HEAD\n")
+	fmt.Fprintf(os.Stderr, "  -S, --staged           staged changes only vs HEAD\n")
+	fmt.Fprintf(os.Stderr, "  -f, --from <ref>       diff from <ref> to HEAD\n")
+	fmt.Fprintf(os.Stderr, "  -b, --base <branch>    override auto-detected base branch\n\n")
+	fmt.Fprintf(os.Stderr, "Utilities  (non-TUI)\n")
+	fmt.Fprintf(os.Stderr, "  -e, --export <file>    export comments to markdown file\n")
+	fmt.Fprintf(os.Stderr, "      --status           print review status summary\n")
+	fmt.Fprintf(os.Stderr, "  -r, --reset            reset review state for this branch\n")
+	fmt.Fprintf(os.Stderr, "  -v, --version          show version\n\n")
+	fmt.Fprintf(os.Stderr, "Tip: git intercepts --help — use  git review -h  or  git review help\n")
 }
 
 func themeIndexForName(name string) int {
