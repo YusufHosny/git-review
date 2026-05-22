@@ -437,6 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.computedStatuses[m.selectedPath] = review.StatusApproved
 				m.reviewState.SetFileStatus(m.selectedPath, review.StatusApproved, m.headCommit, blobHash)
 				m.saveReviewState()
+				m.sessionApproved[m.selectedPath] = true
 				m.updateTreeFocus()
 				m.refreshTreeItems()
 				m.selectedStatus = review.StatusApproved

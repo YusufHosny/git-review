@@ -109,8 +109,9 @@ type Model struct {
 	computedStatuses map[string]review.FileStatus
 	lineComments     map[int]*review.Comment
 
-	isDirtyMode bool
-	filterTab   FilterTab
+	isDirtyMode    bool
+	filterTab      FilterTab
+	sessionApproved map[string]bool
 
 	rangePickerFocus   int
 	rangePickerItems   []git.RefEntry
@@ -209,6 +210,7 @@ func NewModel(
 		gitDir:           gitDir,
 		computedStatuses: computed,
 		lineComments:     make(map[int]*review.Comment),
+		sessionApproved:  make(map[string]bool),
 		themeIndex:       themeIndex,
 		activeTheme:      theme,
 		cfg:              cfg,
@@ -488,10 +490,13 @@ func (m *Model) buildFileListItems() []list.Item {
 			activePaths[ti.FullPath] = true
 		}
 	}
-	// Always keep the currently selected file visible so it doesn't disappear
-	// while the user is on it — files are filtered out when navigating past them.
+	// Always keep the currently selected file visible.
 	if m.selectedPath != "" {
 		activePaths[m.selectedPath] = true
+	}
+	// Keep files approved this session visible until the app closes.
+	for path := range m.sessionApproved {
+		activePaths[path] = true
 	}
 
 	var filtered []list.Item

@@ -240,8 +240,7 @@ func InitStyles(t Theme) {
 
 	HelpTextStyle = lipgloss.NewStyle().
 		Foreground(t.DimText).
-		Background(t.TopBarBg).
-		MarginRight(2)
+		Background(t.TopBarBg)
 
 	EmptyLogoStyle = lipgloss.NewStyle().
 		Foreground(t.AccentText).

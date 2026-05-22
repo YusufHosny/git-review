@@ -571,50 +571,86 @@ func (m Model) viewStatusBar() string {
 }
 
 func (m Model) renderHelpDrawer() string {
-	col1 := lipgloss.JoinVertical(lipgloss.Left,
-		HelpTextStyle.Render("↑/k    Move Up"),
-		HelpTextStyle.Render("↓/j    Move Down"),
-		HelpTextStyle.Render("gg/G   Top/Bottom"),
-		HelpTextStyle.Render("C-d/u  Page ½ Dn/Up"),
-		HelpTextStyle.Render("H/M/L  Top/Mid/Bottom"),
+	bg := m.activeTheme.TopBarBg
+	bgSeq := ansiColorBg(bg)
+	spacer := lipgloss.NewStyle().Background(bg).Width(3).Render("")
+
+	// col builds a column of fixed-width entries so JoinHorizontal never needs
+	// to pad with transparent spaces, which would expose the raw terminal color.
+	col := func(w int, items ...string) string {
+		s := HelpTextStyle.Width(w)
+		rows := make([]string, len(items))
+		for i, item := range items {
+			rows[i] = s.Render(item)
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	}
+
+	c1 := col(21,
+		"↑/k    Move Up",
+		"↓/j    Move Down",
+		"gg/G   Top/Bottom",
+		"C-d/u  Page ½ Dn/Up",
+		"H/M/L  Top/Mid/Bottom",
 	)
-	col2 := lipgloss.JoinVertical(lipgloss.Left,
-		HelpTextStyle.Render("h/l    Focus Left/Right"),
-		HelpTextStyle.Render("Tab    Toggle Panel"),
-		HelpTextStyle.Render("]c/[c  Next/Prev Hunk"),
-		HelpTextStyle.Render("zz/zt  Center/Top Cursor"),
-		HelpTextStyle.Render("e      Edit File"),
+	c2 := col(24,
+		"h/l    Focus Left/Right",
+		"Tab    Toggle Panel",
+		"]c/[c  Next/Prev Hunk",
+		"zz/zt  Center/Top Cursor",
+		"e      Edit File",
 	)
-	col3 := lipgloss.JoinVertical(lipgloss.Left,
-		HelpTextStyle.Render("a      Approve"),
-		HelpTextStyle.Render("u      Mark Unreviewed"),
-		HelpTextStyle.Render("r      Reset File"),
-		HelpTextStyle.Render("R      Reset Review"),
-		HelpTextStyle.Render("n/p    Next/Prev Unreviewed"),
+	c3 := col(27,
+		"a      Approve",
+		"u      Mark Unreviewed",
+		"r      Reset File",
+		"R      Reset Review",
+		"n/p    Next/Prev Unreviewed",
 	)
-	col4 := lipgloss.JoinVertical(lipgloss.Left,
-		HelpTextStyle.Render("c      Comment"),
-		HelpTextStyle.Render("d      Delete Comment"),
-		HelpTextStyle.Render("E      Export"),
-		HelpTextStyle.Render("s      Split View"),
-		HelpTextStyle.Render("t      Theme Picker"),
-		HelpTextStyle.Render("b      Change Range"),
+	c4 := col(21,
+		"c      Comment",
+		"d      Delete Comment",
+		"E      Export",
+		"s      Split View",
+		"t      Theme Picker",
 	)
-	col5 := lipgloss.JoinVertical(lipgloss.Left,
-		HelpTextStyle.Render("F      Fuzzy Search"),
-		HelpTextStyle.Render("/      Search"),
-		HelpTextStyle.Render("f      Toggle Flat View"),
-		HelpTextStyle.Render("v      Toggle View All"),
-		HelpTextStyle.Render("V      Visual Mode"),
-		HelpTextStyle.Render("?      Toggle Help"),
+	c5 := col(23,
+		"F      Fuzzy Search",
+		"/      Search",
+		"f      Toggle Flat View",
+		"v      Toggle View All",
+		"V      Visual Mode",
+	)
+	c6 := col(19,
+		"b      Change Range",
+		"?      Toggle Help",
+		"J/K    Fast Scroll",
+		"N      Prev Match",
+		"C-h/l  Focus L/R",
 	)
 
-	spacer := lipgloss.NewStyle().Width(4).Render("")
-	return HelpDrawerStyle.Width(m.width).Render(
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			col1, spacer, col2, spacer, col3, spacer, col4, spacer, col5,
-		),
+	joined := lipgloss.JoinHorizontal(lipgloss.Top,
+		c1, spacer, c2, spacer, c3, spacer, c4, spacer, c5, spacer, c6,
 	)
+
+	// Re-apply background after every ANSI reset so that JoinHorizontal's
+	// transparent inter-column padding cells all get the background color.
+	if bgSeq != "" {
+		joined = injectBgAfterResets(joined, bgSeq)
+	}
+
+	// Explicitly fill every line to the inner content width.
+	// HelpDrawerStyle Padding(1,2) = 2 per side; Width() in lipgloss sets the
+	// content area (inside padding), so pass m.width-4 to keep total = m.width.
+	innerW := m.width - 4
+	lines := strings.Split(joined, "\n")
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w < innerW {
+			lines[i] = l + bgSeq + strings.Repeat(" ", innerW-w) + "\x1b[0m"
+		}
+	}
+
+	return HelpDrawerStyle.Width(m.width - 4).Render(strings.Join(lines, "\n"))
 }
 
 // ansiColorBg converts a #RRGGBB lipgloss color to an ANSI 24-bit background escape.
