@@ -10,6 +10,11 @@ import (
 	"github.com/YusufHosny/git-review/internal/review"
 )
 
+const (
+	expandedIcon  = "▾"
+	collapsedIcon = "▸"
+)
+
 type FileTree struct {
 	Root *Node
 }
@@ -45,9 +50,9 @@ func (i TreeItem) Title() string {
 	disclosure := " "
 	if i.IsDir {
 		if i.Expanded {
-			disclosure = "▾"
+			disclosure = expandedIcon
 		} else {
-			disclosure = "▸"
+			disclosure = collapsedIcon
 		}
 	}
 	return fmt.Sprintf("%s%s %s %s %s", indent, disclosure, statusIcon, i.Icon, i.Name)

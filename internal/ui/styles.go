@@ -63,14 +63,8 @@ var (
 	TopStatsAddedStyle   lipgloss.Style
 	TopStatsDeletedStyle lipgloss.Style
 
-	DirectoryStyle lipgloss.Style
-	FileStyle      lipgloss.Style
-
-	DiffStyle       lipgloss.Style
 	LineNumberStyle lipgloss.Style
 
-	DiffAddGutter lipgloss.Style
-	DiffDelGutter lipgloss.Style
 	DiffCtxGutter lipgloss.Style
 
 	DiffAddLineStyle lipgloss.Style
@@ -102,18 +96,12 @@ var (
 	EmptyLogoStyle   lipgloss.Style
 	EmptyDescStyle   lipgloss.Style
 	EmptyStatusStyle lipgloss.Style
-	EmptyHeaderStyle lipgloss.Style
-	EmptyCodeStyle   lipgloss.Style
 
 	OverlayStyle lipgloss.Style
 	OverlayTitle lipgloss.Style
-
-	ColorText lipgloss.Color
 )
 
 func InitStyles(t Theme) {
-	ColorText = t.NormalText
-
 	PaneStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.BorderNormal).
@@ -129,7 +117,8 @@ func InitStyles(t Theme) {
 	TopBarStyle = lipgloss.NewStyle().
 		Background(t.TopBarBg).
 		Foreground(t.TopBarFg).
-		Height(1)
+		Height(1).
+		MaxHeight(1)
 
 	TopInfoStyle = lipgloss.NewStyle().
 		Bold(true).
@@ -147,10 +136,6 @@ func InitStyles(t Theme) {
 		PaddingLeft(1).
 		PaddingRight(1)
 
-	DirectoryStyle = lipgloss.NewStyle().Foreground(t.AccentText2)
-	FileStyle = lipgloss.NewStyle().Foreground(t.NormalText)
-
-	DiffStyle = lipgloss.NewStyle().Padding(0, 0)
 	LineNumberStyle = lipgloss.NewStyle().
 		Foreground(t.LineNumberFg).
 		Background(t.CanvasBg).
@@ -158,8 +143,6 @@ func InitStyles(t Theme) {
 		Align(lipgloss.Right).
 		MarginRight(1)
 
-	DiffAddGutter = lipgloss.NewStyle().Foreground(t.GutterAdd).Bold(true)
-	DiffDelGutter = lipgloss.NewStyle().Foreground(t.GutterDel).Bold(true)
 	DiffCtxGutter = lipgloss.NewStyle().Foreground(t.GutterCtx).Background(t.CanvasBg)
 
 	DiffAddLineStyle = lipgloss.NewStyle().Background(t.AddBg)
@@ -187,7 +170,8 @@ func InitStyles(t Theme) {
 	StatusBarStyle = lipgloss.NewStyle().
 		Background(t.StatusBarBg).
 		Foreground(t.StatusBarFg).
-		Height(1)
+		Height(1).
+		MaxHeight(1)
 
 	StatusKeyStyle = lipgloss.NewStyle().
 		Foreground(t.DimText).
@@ -254,13 +238,6 @@ func InitStyles(t Theme) {
 	EmptyStatusStyle = lipgloss.NewStyle().
 		Foreground(t.DimText).
 		MarginBottom(2)
-
-	EmptyHeaderStyle = lipgloss.NewStyle().
-		Foreground(t.DimText).
-		Bold(true).
-		MarginBottom(1)
-
-	EmptyCodeStyle = lipgloss.NewStyle().Foreground(t.DimText)
 
 	OverlayStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

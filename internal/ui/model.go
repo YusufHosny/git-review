@@ -694,7 +694,6 @@ func (m *Model) saveReviewState() {
 	_ = review.Save(m.gitDir, m.reviewState)
 }
 
-
 func (m *Model) findNextUnreviewedFile(dir int) int {
 	items := m.fileList.Items()
 	currentIdx := m.fileList.Index()

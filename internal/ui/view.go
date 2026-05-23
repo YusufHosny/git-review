@@ -419,16 +419,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 		diffContentStr = strings.Join(lines, "\n")
 	}
 
-	diffPaneStyle := PaneStyle
-	if m.focus == FocusDiff {
-		diffPaneStyle = FocusedPaneStyle
-	}
-
-	return diffPaneStyle.
-		Width(m.diffViewport.Width - 4).
-		Height(contentHeight - 2).
-		MaxHeight(contentHeight).
-		Render(diffContentStr)
+	return m.renderDiffPane(diffContentStr, contentHeight)
 }
 
 func (m Model) renderTopBar() string {
@@ -720,6 +711,18 @@ func wrapCodeRows(content string, width int) []string {
 	}
 
 	return rows
+}
+
+func (m Model) renderDiffPane(content string, contentHeight int) string {
+	style := PaneStyle
+	if m.focus == FocusDiff {
+		style = FocusedPaneStyle
+	}
+	return style.
+		Width(m.diffViewport.Width - 4).
+		Height(contentHeight - 2).
+		MaxHeight(contentHeight).
+		Render(content)
 }
 
 func (m Model) renderEmptyState(w, h int) string {

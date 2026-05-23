@@ -63,7 +63,7 @@ func (m Model) renderConfirmOverlay() string {
 	bg := ansiColorBg(m.activeTheme.TopBarBg)
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		OverlayTitle.Render("Confirm"),
-		lipgloss.NewStyle().Foreground(ColorText).Render(m.confirmMsg),
+		lipgloss.NewStyle().Foreground(m.activeTheme.NormalText).Render(m.confirmMsg),
 		"",
 		HelpTextStyle.Render("y confirm  n/esc cancel"),
 	)

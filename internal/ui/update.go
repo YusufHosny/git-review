@@ -281,7 +281,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					line = m.gitClient.CalculateFileLine(m.diffLines, m.diffCursor)
 				}
 				m.inputBuffer = ""
-				return m, m.gitClient.OpenEditorCmd(m.selectedPath, line, m.cfg.Editor)
+				return m, git.OpenEditorCmd(m.selectedPath, line, m.cfg.Editor)
 			}
 
 		// === z-prefix scrolling ===
@@ -924,15 +924,30 @@ func (m Model) launchFzfCmd() tea.Cmd {
 
 // execFzfCmd is returned from Update when FzfReadyMsg is received.
 func execFzfCmd(inputPath, outputPath string) tea.Cmd {
-	shCmd := fmt.Sprintf("fzf --ansi < '%s' > '%s'", inputPath, outputPath)
-	cmd := exec.Command("sh", "-c", shCmd)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
+	cleanup := func() {
+		os.Remove(inputPath)
+		os.Remove(outputPath)
+	}
+
+	inputFile, err := os.Open(inputPath)
+	if err != nil {
+		return func() tea.Msg { cleanup(); return FzfDoneMsg{Err: err} }
+	}
+	outputFile, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		inputFile.Close()
+		return func() tea.Msg { cleanup(); return FzfDoneMsg{Err: err} }
+	}
+
+	cmd := exec.Command("fzf", "--ansi")
+	cmd.Stdin = inputFile
+	cmd.Stdout = outputFile
 	cmd.Stderr = os.Stderr
 
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		defer os.Remove(inputPath)
-		defer os.Remove(outputPath)
+		inputFile.Close()
+		outputFile.Close()
+		defer cleanup()
 
 		data, readErr := os.ReadFile(outputPath)
 		if readErr != nil || len(data) == 0 {

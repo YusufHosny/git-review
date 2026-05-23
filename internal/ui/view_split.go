@@ -104,7 +104,7 @@ func (m Model) renderSplitDiff(contentHeight int) string {
 	if start >= len(splitLines) {
 		start = 0
 	}
-	end := min(start+contentHeight, len(splitLines))
+	end := min(start+m.diffViewport.Height-1, len(splitLines))
 
 	var sb strings.Builder
 
@@ -158,16 +158,7 @@ func (m Model) renderSplitDiff(contentHeight int) string {
 		content = injectBgAfterResets(content, canvasBg)
 	}
 
-	diffPaneStyle := PaneStyle
-	if m.focus == FocusDiff {
-		diffPaneStyle = FocusedPaneStyle
-	}
-
-	return diffPaneStyle.
-		Width(m.diffViewport.Width - 4).
-		Height(contentHeight - 2).
-		MaxHeight(contentHeight).
-		Render("\n" + content)
+	return m.renderDiffPane("\n"+content, contentHeight)
 }
 
 func padRight(s string, width int) string {

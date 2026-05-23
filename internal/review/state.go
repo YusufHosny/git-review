@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,11 +25,11 @@ func Load(gitDir, branch string) (*State, error) {
 				UpdatedAt: time.Now(),
 			}, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("read review state: %w", err)
 	}
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse review state: %w", err)
 	}
 	if s.Files == nil {
 		s.Files = make(map[string]*FileState)
@@ -42,14 +43,17 @@ func Load(gitDir, branch string) (*State, error) {
 func Save(gitDir string, s *State) error {
 	dir := filepath.Join(gitDir, "review")
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+		return fmt.Errorf("create review directory: %w", err)
 	}
 	s.UpdatedAt = time.Now()
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal review state: %w", err)
 	}
-	return os.WriteFile(statePath(gitDir, s.Branch), data, 0644)
+	if err := os.WriteFile(statePath(gitDir, s.Branch), data, 0644); err != nil {
+		return fmt.Errorf("write review state: %w", err)
+	}
+	return nil
 }
 
 func (s *State) SetFileStatus(file string, status FileStatus, headCommit string, blobHash ...string) {
@@ -121,10 +125,10 @@ func statePath(gitDir, branch string) string {
 	return filepath.Join(gitDir, "review", slug+".json")
 }
 
-var slugRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+var branchSlugInvalidCharRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
 func branchSlug(branch string) string {
-	slug := slugRe.ReplaceAllString(branch, "-")
+	slug := branchSlugInvalidCharRe.ReplaceAllString(branch, "-")
 	return strings.Trim(slug, "-")
 }
 
