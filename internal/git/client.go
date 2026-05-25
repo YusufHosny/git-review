@@ -17,7 +17,12 @@ var ansiRe = regexp.MustCompile(`[][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]
 // hunkHeaderRe matches unified diff hunk headers and captures the new-file start line.
 var hunkHeaderRe = regexp.MustCompile(`^@@ \-\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
-type DiffMsg struct{ Content string }
+type DiffMsg struct {
+	Content string
+	Path    string
+	From    string
+	To      string
+}
 type EditorFinishedMsg struct{ Err error }
 type FzfResultMsg struct {
 	File  string
@@ -177,11 +182,90 @@ func (c *Client) rawDiff(from, to, path string) []byte {
 func (c *Client) DiffCmd(from, to, path string) tea.Cmd {
 	return func() tea.Msg {
 		out := c.rawDiff(from, to, path)
-		if len(out) == 0 {
-			return DiffMsg{Content: ""}
-		}
-		return DiffMsg{Content: string(out)}
+		return DiffMsg{Content: string(out), Path: path, From: from, To: to}
 	}
+}
+
+func (c *Client) ListChangedFilesShow(sha string) ([]string, error) {
+	out, err := c.gitCmd("show", sha, "--diff-merges=cc", "--name-only", "--pretty=format:").Output()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	return appendUniqueLines(nil, seen, out), nil
+}
+
+func (c *Client) rawDiffShow(sha, path string) []byte {
+	out, _ := c.gitCmd("show", sha, "--diff-merges=cc", "--", path).Output()
+	return out
+}
+
+func (c *Client) DiffShowCmd(sha, path string) tea.Cmd {
+	return func() tea.Msg {
+		out := c.rawDiffShow(sha, path)
+		return DiffMsg{Content: string(out), Path: path, From: sha, To: "show"}
+	}
+}
+
+func (c *Client) numstatShow(sha string) ([]byte, error) {
+	return c.gitCmd("show", sha, "--diff-merges=cc", "--numstat", "--pretty=format:").Output()
+}
+
+func (c *Client) DiffStatsShow(sha string) (int, int, error) {
+	out, err := c.numstatShow(sha)
+	if err != nil {
+		return 0, 0, fmt.Errorf("git show numstat: %w", err)
+	}
+	var added, deleted int
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		a, d, _, ok := parseNumstatLine(line)
+		if ok {
+			added += a
+			deleted += d
+		}
+	}
+	return added, deleted, nil
+}
+
+func (c *Client) DiffStatsByFileShow(sha string) (map[string][2]int, error) {
+	out, err := c.numstatShow(sha)
+	if err != nil {
+		return nil, fmt.Errorf("git show numstat: %w", err)
+	}
+	result := make(map[string][2]int)
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		a, d, filePath, ok := parseNumstatLine(line)
+		if ok {
+			result[filePath] = [2]int{a, d}
+		}
+	}
+	return result, nil
+}
+
+func (c *Client) AllDiffLinesShow(sha string) ([]DiffLine, error) {
+	files, err := c.ListChangedFilesShow(sha)
+	if err != nil {
+		return nil, err
+	}
+	var result []DiffLine
+	for _, file := range files {
+		out := c.rawDiffShow(sha, file)
+		if len(out) == 0 {
+			continue
+		}
+		for i, line := range strings.Split(string(out), "\n") {
+			clean := StripAnsi(line)
+			if clean == "" {
+				continue
+			}
+			if strings.HasPrefix(clean, "+") && !strings.HasPrefix(clean, "+++") {
+				result = append(result, DiffLine{File: file, Index: i, Content: "+" + clean[1:]})
+			} else if strings.HasPrefix(clean, "-") && !strings.HasPrefix(clean, "---") {
+				result = append(result, DiffLine{File: file, Index: i, Content: "-" + clean[1:]})
+			}
+		}
+	}
+	return result, nil
 }
 
 // OpenEditorCmd returns a BubbleTea command that opens path at lineNumber in editor.

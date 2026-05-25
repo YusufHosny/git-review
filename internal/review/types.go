@@ -11,6 +11,13 @@ const (
 	StatusChanged    FileStatus = "changed"
 )
 
+type ReviewKind string
+
+const (
+	ReviewKindBranch ReviewKind = "branch"
+	ReviewKindCustom ReviewKind = "custom"
+)
+
 type FileState struct {
 	Status           FileStatus `json:"status"`
 	ApprovedAtCommit string     `json:"approved_at_commit,omitempty"`
@@ -29,6 +36,8 @@ type Comment struct {
 type State struct {
 	Version         int                   `json:"version"`
 	Branch          string                `json:"branch"`
+	Kind            ReviewKind            `json:"kind,omitempty"`
+	CustomLabel     string                `json:"custom_label,omitempty"`
 	BaseRef         string                `json:"base_ref,omitempty"`
 	MergeBaseCommit string                `json:"merge_base_commit,omitempty"`
 	RangeFrom       string                `json:"range_from"`

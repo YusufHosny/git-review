@@ -95,9 +95,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.fileList.Select(i)
 					m.selectedPath = ti.FullPath
 					m.diffCursor = msg.Index
-					from, to := m.diffRangeForFile(m.selectedPath)
-					m.currentFrom, m.currentTo = from, to
-					cmds = append(cmds, m.gitClient.DiffCmd(from, to, m.selectedPath))
+					cmds = append(cmds, m.fetchDiffForSelected())
 					break
 				}
 			}
@@ -582,7 +580,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// === Range picker ===
 		case "b":
-			if !m.isDirtyMode {
+			if !m.isDirtyMode && m.showCommit == "" {
 				commits, _ := m.gitClient.ListBranchesAndCommits(30)
 
 				// Prepend current base and head as named entries at the top.
@@ -630,9 +628,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.diffViewport.GotoTop()
 				m.rebuildLineComments()
 
-				from, to := m.diffRangeForFile(m.selectedPath)
-				m.currentFrom, m.currentTo = from, to
-				cmds = append(cmds, m.gitClient.DiffCmd(from, to, m.selectedPath))
+				cmds = append(cmds, m.fetchDiffForSelected())
 
 				// Auto-mark unreviewed files as "viewed"
 				if m.computedStatuses[m.selectedPath] == review.StatusUnreviewed {
@@ -649,20 +645,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle async messages
 	switch msg := msg.(type) {
 	case git.DiffMsg:
+		// Ignore stale responses that arrived after the user navigated away.
+		if msg.Path != m.selectedPath || msg.From != m.currentFrom || msg.To != m.currentTo {
+			break
+		}
+
 		content := strings.ToValidUTF8(msg.Content, "?")
 		content = strings.ReplaceAll(content, "\t", "    ")
 		content = ctrlRe.ReplaceAllString(content, "?")
 		content = c1CtrlRe.ReplaceAllString(content, "?")
-		
+
 		fullLines := strings.Split(content, "\n")
-		var cleanLines, hlLines []string
+		var cleanLines []string
 		var added, deleted int
 		foundHunk := false
 
-		ext := strings.TrimPrefix(filepath.Ext(m.selectedPath), ".")
-		if ext == "" {
-			ext = "txt"
-		}
+		// codeContents holds stripped code for each clean line that is a diff content
+		// line (+/-/space). codeIdxs maps each entry back to its cleanLines index so
+		// we can splice the highlighted result back in.
+		var codeContents []string
+		var codeIdxs []int
 
 		for _, line := range fullLines {
 			cleanLine := stripAnsi(line)
@@ -676,6 +678,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			cleanLines = append(cleanLines, line)
+			idx := len(cleanLines) - 1
 
 			isAdd := strings.HasPrefix(cleanLine, "+") && !strings.HasPrefix(cleanLine, "+++")
 			isDel := strings.HasPrefix(cleanLine, "-") && !strings.HasPrefix(cleanLine, "---")
@@ -686,28 +689,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				deleted++
 			}
 
-			codeContent := cleanLine
-			if len(codeContent) > 0 && (isAdd || isDel || strings.HasPrefix(codeContent, " ")) {
-				codeContent = codeContent[1:]
-			}
-
-			var buf strings.Builder
-			err := quick.Highlight(&buf, codeContent, ext, "terminal16m", m.activeTheme.ChromaTheme)
-			if err == nil && buf.String() != "" {
-				hlLines = append(hlLines, strings.TrimSuffix(buf.String(), "\n"))
-			} else {
-				hlLines = append(hlLines, codeContent)
+			if isAdd || isDel || strings.HasPrefix(cleanLine, " ") {
+				codeContents = append(codeContents, cleanLine[1:])
+				codeIdxs = append(codeIdxs, idx)
 			}
 		}
 
 		// Trim trailing empty lines
 		for len(cleanLines) > 0 {
-			lastLine := strings.TrimRight(stripAnsi(cleanLines[len(cleanLines)-1]), "\r")
-			if lastLine != "" {
+			if strings.TrimRight(stripAnsi(cleanLines[len(cleanLines)-1]), "\r") != "" {
 				break
 			}
 			cleanLines = cleanLines[:len(cleanLines)-1]
-			hlLines = hlLines[:len(hlLines)-1]
+		}
+
+		// Build hlLines: default to plain stripped code.
+		hlLines := make([]string, len(cleanLines))
+		for i, cl := range cleanLines {
+			s := stripAnsi(cl)
+			if len(s) > 0 && (s[0] == '+' || s[0] == '-' || s[0] == ' ') {
+				hlLines[i] = s[1:]
+			} else {
+				hlLines[i] = s
+			}
+		}
+
+		// Highlight all code in one chroma call instead of per-line to avoid
+		// the O(N) overhead of repeated lexer initialisation on large diffs.
+		if len(codeContents) > 0 {
+			ext := strings.TrimPrefix(filepath.Ext(m.selectedPath), ".")
+			if ext == "" {
+				ext = "txt"
+			}
+			var hlBuf strings.Builder
+			if err := quick.Highlight(&hlBuf, strings.Join(codeContents, "\n"), ext, "terminal16m", m.activeTheme.ChromaTheme); err == nil && hlBuf.Len() > 0 {
+				parts := strings.Split(hlBuf.String(), "\n")
+				for i, idx := range codeIdxs {
+					if i < len(parts) && idx < len(hlLines) {
+						hlLines[idx] = strings.TrimSuffix(parts[i], "\r")
+					}
+				}
+			}
 		}
 
 		m.diffLines = cleanLines
@@ -725,8 +747,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildLineComments()
 
 	case git.EditorFinishedMsg:
-		from, to := m.diffRangeForFile(m.selectedPath)
-		return m, m.gitClient.DiffCmd(from, to, m.selectedPath)
+		return m, m.fetchDiffForSelected()
 	}
 
 	return m, tea.Batch(cmds...)
@@ -897,7 +918,13 @@ func (m Model) launchFzfCmd() tea.Cmd {
 			return ExportDoneMsg{Err: fmt.Errorf("fzf not found in PATH")}
 		}
 
-		lines, err := m.gitClient.AllDiffLines(m.from, m.to)
+		var lines []git.DiffLine
+		var err error
+		if m.showCommit != "" {
+			lines, err = m.gitClient.AllDiffLinesShow(m.showCommit)
+		} else {
+			lines, err = m.gitClient.AllDiffLines(m.from, m.to)
+		}
 		if err != nil || len(lines) == 0 {
 			return ExportDoneMsg{Err: fmt.Errorf("no diff lines to search")}
 		}

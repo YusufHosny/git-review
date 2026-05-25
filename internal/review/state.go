@@ -13,17 +13,19 @@ import (
 )
 
 func Load(gitDir, branch string) (*State, error) {
-	path := statePath(gitDir, branch)
+	return loadForKind(gitDir, branch, ReviewKindBranch)
+}
+
+func LoadCustom(gitDir, branch string) (*State, error) {
+	return loadForKind(gitDir, branch, ReviewKindCustom)
+}
+
+func loadForKind(gitDir, branch string, kind ReviewKind) (*State, error) {
+	path := statePath(gitDir, branch, kind)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &State{
-				Version:   1,
-				Branch:    branch,
-				Files:     make(map[string]*FileState),
-				Comments:  []*Comment{},
-				UpdatedAt: time.Now(),
-			}, nil
+			return newEmptyState(branch, kind), nil
 		}
 		return nil, fmt.Errorf("read review state: %w", err)
 	}
@@ -37,7 +39,21 @@ func Load(gitDir, branch string) (*State, error) {
 	if s.Comments == nil {
 		s.Comments = []*Comment{}
 	}
+	if s.Kind == "" {
+		s.Kind = kind
+	}
 	return &s, nil
+}
+
+func newEmptyState(branch string, kind ReviewKind) *State {
+	return &State{
+		Version:   1,
+		Branch:    branch,
+		Kind:      kind,
+		Files:     make(map[string]*FileState),
+		Comments:  []*Comment{},
+		UpdatedAt: time.Now(),
+	}
 }
 
 func Save(gitDir string, s *State) error {
@@ -50,10 +66,23 @@ func Save(gitDir string, s *State) error {
 	if err != nil {
 		return fmt.Errorf("marshal review state: %w", err)
 	}
-	if err := os.WriteFile(statePath(gitDir, s.Branch), data, 0644); err != nil {
+	kind := s.Kind
+	if kind == "" {
+		kind = ReviewKindBranch
+	}
+	if err := os.WriteFile(statePath(gitDir, s.Branch, kind), data, 0644); err != nil {
 		return fmt.Errorf("write review state: %w", err)
 	}
 	return nil
+}
+
+func (s *State) HasProgress() bool {
+	for _, fs := range s.Files {
+		if fs.Status != StatusUnreviewed {
+			return true
+		}
+	}
+	return len(s.Comments) > 0
 }
 
 func (s *State) SetFileStatus(file string, status FileStatus, headCommit string, blobHash ...string) {
@@ -120,8 +149,11 @@ func (s *State) Reset() {
 	s.Comments = []*Comment{}
 }
 
-func statePath(gitDir, branch string) string {
+func statePath(gitDir, branch string, kind ReviewKind) string {
 	slug := branchSlug(branch)
+	if kind == ReviewKindCustom {
+		return filepath.Join(gitDir, "review", slug+".custom.json")
+	}
 	return filepath.Join(gitDir, "review", slug+".json")
 }
 

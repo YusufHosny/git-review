@@ -110,6 +110,7 @@ type Model struct {
 	lineComments     map[int]*review.Comment
 
 	isDirtyMode    bool
+	showCommit     string
 	filterTab      FilterTab
 	sessionApproved map[string]bool
 
@@ -151,6 +152,7 @@ func NewModel(
 	headCommit string,
 	themeIndex int,
 	isDirtyMode bool,
+	showCommit string,
 ) Model {
 	theme := Themes[themeIndex%len(Themes)]
 	InitStyles(theme)
@@ -158,11 +160,20 @@ func NewModel(
 	currentBranch := gitClient.GetCurrentBranch()
 	repoName := gitClient.GetRepoName()
 
-	files, _ := gitClient.ListChangedFiles(from, to)
+	var files []string
+	if showCommit != "" {
+		files, _ = gitClient.ListChangedFilesShow(showCommit)
+	} else {
+		files, _ = gitClient.ListChangedFiles(from, to)
+	}
 
 	computed := make(map[string]review.FileStatus)
 	for _, f := range files {
-		computed[f] = reviewState.GetFileStatus(f)
+		if isDirtyMode {
+			computed[f] = review.StatusUnreviewed
+		} else {
+			computed[f] = reviewState.GetFileStatus(f)
+		}
 	}
 
 	t := tree.New(files)
@@ -218,6 +229,7 @@ func NewModel(
 		searchInput:      si,
 		fileStats:        make(map[string][2]int),
 		isDirtyMode:      isDirtyMode,
+		showCommit:       showCommit,
 		filterTab:        FilterNotApproved,
 	}
 
@@ -231,6 +243,12 @@ func NewModel(
 		}
 	}
 
+	// currentFrom/currentTo must be set before Init fires DiffCmd so that the
+	// returning DiffMsg passes the stale-check in the Update handler.
+	if m.selectedPath != "" {
+		m.currentFrom, m.currentTo = m.diffRangeForFile(m.selectedPath)
+	}
+
 	m.applyThemeToCommentInput()
 	return m
 }
@@ -239,12 +257,11 @@ func (m Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
 	if m.selectedPath != "" {
-		from, to := m.diffRangeForFile(m.selectedPath)
-		cmds = append(cmds, m.gitClient.DiffCmd(from, to, m.selectedPath))
+		cmds = append(cmds, m.fetchDiffCmd(m.selectedPath))
 	}
 
 	cmds = append(cmds, m.fetchStatsCmd())
-	if !m.isDirtyMode {
+	if !m.isDirtyMode && m.showCommit == "" {
 		cmds = append(cmds, m.checkAllApprovedFilesCmd())
 	}
 
@@ -253,13 +270,33 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) fetchStatsCmd() tea.Cmd {
 	return func() tea.Msg {
-		added, deleted, err := m.gitClient.DiffStats(m.from, m.to)
+		var added, deleted int
+		var byFile map[string][2]int
+		var err error
+		if m.showCommit != "" {
+			added, deleted, err = m.gitClient.DiffStatsShow(m.showCommit)
+			if err == nil {
+				byFile, _ = m.gitClient.DiffStatsByFileShow(m.showCommit)
+			}
+		} else {
+			added, deleted, err = m.gitClient.DiffStats(m.from, m.to)
+			if err == nil {
+				byFile, _ = m.gitClient.DiffStatsByFile(m.from, m.to)
+			}
+		}
 		if err != nil {
 			return nil
 		}
-		byFile, _ := m.gitClient.DiffStatsByFile(m.from, m.to)
 		return StatsMsg{Added: added, Deleted: deleted, ByFile: byFile}
 	}
+}
+
+func (m *Model) fetchDiffCmd(path string) tea.Cmd {
+	if m.showCommit != "" {
+		return m.gitClient.DiffShowCmd(m.showCommit, path)
+	}
+	from, to := m.diffRangeForFile(path)
+	return m.gitClient.DiffCmd(from, to, path)
 }
 
 func (m Model) checkAllApprovedFilesCmd() tea.Cmd {
@@ -347,13 +384,7 @@ func (m *Model) visualRowsForLine(i int) int {
 		codeContent = codeContent[1:]
 	}
 	codeMaxW := m.codeMaxW()
-	w := len([]rune(codeContent))
-	var rows int
-	if w == 0 || codeMaxW == 0 {
-		rows = 1
-	} else {
-		rows = (w + codeMaxW - 1) / codeMaxW
-	}
+	rows := len(wrapCodeRows(codeContent, codeMaxW))
 	if m.cfg.UI.ShowCommentsInline {
 		if _, hasComment := m.lineComments[i]; hasComment {
 			rows++
@@ -637,7 +668,7 @@ func (m *Model) prettyRef(ref, role string) string {
 }
 
 func (m *Model) diffRangeForFile(file string) (string, string) {
-	if m.computedStatuses[file] == review.StatusChanged {
+	if m.showCommit == "" && m.computedStatuses[file] == review.StatusChanged {
 		if approvedAt := m.reviewState.GetApprovedAtCommit(file); approvedAt != "" {
 			return approvedAt, "HEAD"
 		}
@@ -692,6 +723,12 @@ func (m *Model) saveReviewState() {
 		return
 	}
 	_ = review.Save(m.gitDir, m.reviewState)
+}
+
+func (m *Model) fetchDiffForSelected() tea.Cmd {
+	from, to := m.diffRangeForFile(m.selectedPath)
+	m.currentFrom, m.currentTo = from, to
+	return m.fetchDiffCmd(m.selectedPath)
 }
 
 func (m *Model) findNextUnreviewedFile(dir int) int {
