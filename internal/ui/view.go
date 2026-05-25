@@ -134,12 +134,12 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 	}
 	start := m.diffViewport.YOffset
 
-	// Width(diffViewport.Width-4) = content-box text area (excludes 2 padding + 2 border).
-	// wrapAt = diffViewport.Width-4.
-	// lineNum(5) + gutter(4) = 9 chars overhead for numbered lines.
-	// So codeMaxW = diffViewport.Width-4-9 = diffViewport.Width-13.
-	// maxLineWidth = codeMaxW+4 (gutter) = diffViewport.Width-9.
-	maxLineWidth := max(1, m.diffViewport.Width-9)
+	// renderDiffPane uses Width(diffViewport.Width-4) with Padding(0,1), so the
+	// actual text area = (diffViewport.Width-4) - 2*padding = diffViewport.Width-6.
+	// lineNum(5) + gutter(4) = 9 chars overhead, so codeMaxW = diffViewport.Width-6-9 = diffViewport.Width-15.
+	// maxLineWidth = codeMaxW+4 (gutter) = diffViewport.Width-11.
+	innerW := max(1, m.diffViewport.Width-6)
+	maxLineWidth := max(1, m.diffViewport.Width-11)
 
 	lineNumMode := m.cfg.UI.LineNumbers
 
@@ -181,7 +181,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 				hunkStyle := lipgloss.NewStyle().
 					Foreground(m.activeTheme.CommentFg).
 					Background(m.activeTheme.TopBarBg)
-				line := hunkStyle.Render(ansi.Truncate(cleanLine, maxLineWidth+6, ""))
+				line := hunkStyle.Render(ansi.Truncate(cleanLine, innerW, ""))
 				renderedDiff.WriteString(line + "\n")
 				visualRows++
 			}
@@ -207,6 +207,7 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 		if len(codeContent) > 0 && (isAdd || isDel || strings.HasPrefix(codeContent, " ")) {
 			codeContent = codeContent[1:]
 		}
+		codeContent = expandTabs(codeContent)
 
 		// Determine cursor / visual selection
 		isCursor := false
@@ -405,7 +406,6 @@ func (m Model) renderUnifiedDiff(contentHeight int) string {
 	// terminal's background color cannot show through anywhere in the pane.
 	if canvasBgSeq := ansiColorBg(m.activeTheme.CanvasBg); canvasBgSeq != "" {
 		diffContentStr = injectBgAfterResets(diffContentStr, canvasBgSeq)
-		innerW := max(1, m.diffViewport.Width-4)
 		targetH := max(1, contentHeight-2)
 		lines := strings.Split(diffContentStr, "\n")
 		for i, l := range lines {
@@ -677,6 +677,17 @@ func injectBgAfterResets(s, bgAnsi string) string {
 	return bgAnsi + s
 }
 
+// expandTabs replaces tab characters with spaces. Tabs have zero visual width
+// in lipgloss/ansi measurement but the terminal renders them as multiple columns,
+// causing measurement mismatches and pane overflow. Using 4 spaces matches most
+// modern code styles; raw git diff output preserves literal tab characters.
+func expandTabs(s string) string {
+	if !strings.Contains(s, "\t") {
+		return s
+	}
+	return strings.ReplaceAll(s, "\t", "    ")
+}
+
 // wrapCodeRows splits content into visual rows of at most width columns.
 // Continuation rows are prefixed with the same leading whitespace as the first
 // row so wrapped lines stay visually indented at the correct level.
@@ -685,7 +696,7 @@ func wrapCodeRows(content string, width int) []string {
 		return []string{content}
 	}
 
-	// Count leading spaces so continuation rows can re-indent.
+	// Count leading spaces so we can re-add the indent to every row.
 	indent := 0
 	for _, ch := range content {
 		if ch == ' ' {
@@ -695,19 +706,35 @@ func wrapCodeRows(content string, width int) []string {
 		}
 	}
 
-	wrapped := ansi.Hardwrap(content, width, true)
+	// Strip the indent and wrap the remainder at (width - indent) so that
+	// re-adding the prefix to every row stays within width.
+	// If indent >= width we fall through to plain wrapping at width.
+	prefix := ""
+	body := content
+	wrapAt := width
+	if indent > 0 && indent < width {
+		prefix = strings.Repeat(" ", indent)
+		body = content[indent:]
+		wrapAt = width - indent
+	}
+
+	// ansi.Wrap breaks at word boundaries (spaces/hyphens) and only hard-breaks
+	// mid-word when a single token exceeds wrapAt. ansi.Hardwrap always breaks
+	// at exactly wrapAt, which can split identifiers mid-character.
+	wrapped := ansi.Wrap(body, wrapAt, " ")
 	rows := strings.Split(wrapped, "\n")
 	if len(rows) == 0 {
 		return []string{content}
 	}
 
-	if indent > 0 {
-		prefix := strings.Repeat(" ", indent)
-		for i := 1; i < len(rows); i++ {
-			if rows[i] != "" {
-				rows[i] = prefix + rows[i]
-			}
+	for i, row := range rows {
+		// Wrap may include a trailing space when the break falls on a word
+		// boundary; strip it so rows don't exceed wrapAt.
+		row = strings.TrimRight(row, " ")
+		if prefix != "" && row != "" {
+			row = prefix + row
 		}
+		rows[i] = row
 	}
 
 	return rows

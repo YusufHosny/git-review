@@ -69,14 +69,14 @@ func parseSplitLines(diffLines []string) []splitLine {
 		}
 
 		if strings.HasPrefix(clean, "-") {
-			delBuf = append(delBuf, clean[1:])
+			delBuf = append(delBuf, expandTabs(clean[1:]))
 		} else if strings.HasPrefix(clean, "+") {
-			addBuf = append(addBuf, clean[1:])
+			addBuf = append(addBuf, expandTabs(clean[1:]))
 		} else {
 			flush()
 			content := clean
 			if len(content) > 0 {
-				content = content[1:]
+				content = expandTabs(content[1:])
 			}
 			result = append(result, splitLine{
 				leftNum:   leftLine,
