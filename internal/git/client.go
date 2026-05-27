@@ -102,7 +102,49 @@ func (c *Client) AutoDetectBase(override string) string {
 	if override != "" {
 		return override
 	}
-	// Try common default branches in order; fall back to HEAD if none exist.
+
+	currentBranch := c.GetCurrentBranch()
+	headSHA, err := c.gitOutput("rev-parse", "HEAD")
+	if err != nil {
+		headSHA = "HEAD"
+	}
+
+	// Find the branch with the smallest number of commits between its merge-base
+	// and HEAD — that's the closest ancestor and the most likely base branch.
+	branchOut, err := c.gitOutput("branch", "--format=%(refname:short)")
+	if err == nil {
+		bestBranch := ""
+		bestDistance := -1
+
+		for _, branch := range strings.Split(branchOut, "\n") {
+			branch = strings.TrimSpace(branch)
+			if branch == "" || branch == currentBranch {
+				continue
+			}
+			mb, mbErr := c.gitOutput("merge-base", headSHA, branch)
+			if mbErr != nil {
+				continue
+			}
+			countStr, countErr := c.gitOutput("rev-list", "--count", mb+".."+headSHA)
+			if countErr != nil {
+				continue
+			}
+			count, _ := strconv.Atoi(countStr)
+			if bestDistance == -1 || count < bestDistance {
+				bestDistance = count
+				bestBranch = branch
+			} else if count == bestDistance {
+				// Ambiguous tie — clear winner so we fall back below.
+				bestBranch = ""
+			}
+		}
+
+		if bestBranch != "" && bestDistance >= 0 {
+			return bestBranch
+		}
+	}
+
+	// Fall back to common default branches.
 	for _, candidate := range []string{"main", "master", "develop"} {
 		if _, err := c.gitCmd("rev-parse", "--verify", candidate).Output(); err == nil {
 			return candidate
