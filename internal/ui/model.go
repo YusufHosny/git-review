@@ -731,6 +731,20 @@ func (m *Model) fetchDiffForSelected() tea.Cmd {
 	return m.fetchDiffCmd(m.selectedPath)
 }
 
+// fetchDiffAfterEdit re-fetches the diff for the selected file after editing it
+// in the working tree. In commit-range modes `to` is a fixed HEAD commit SHA, so
+// `git diff base..<sha>` would not reflect the just-made working-tree edits. When
+// we're reviewing up to current HEAD, diff the file against the working tree so
+// the edits are visible instead of the stale pre-edit version.
+func (m *Model) fetchDiffAfterEdit() tea.Cmd {
+	if m.showCommit == "" && m.headCommit != "" && m.to == m.headCommit {
+		from, _ := m.diffRangeForFile(m.selectedPath)
+		m.currentFrom, m.currentTo = from, "HEAD"
+		return m.gitClient.DiffCmd(from, "HEAD", m.selectedPath)
+	}
+	return m.fetchDiffForSelected()
+}
+
 func (m *Model) findNextUnreviewedFile(dir int) int {
 	items := m.fileList.Items()
 	currentIdx := m.fileList.Index()

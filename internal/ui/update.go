@@ -747,7 +747,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildLineComments()
 
 	case git.EditorFinishedMsg:
-		return m, m.fetchDiffForSelected()
+		return m, m.fetchDiffAfterEdit()
 	}
 
 	return m, tea.Batch(cmds...)
