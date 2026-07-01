@@ -553,7 +553,7 @@ func (m Model) viewStatusBar() string {
 		)
 	}
 
-	shortcuts := StatusKeyStyle.Render("?help  q quit  Tab focus  a approve  c comment  E export  s split  t theme  v toggle all  b range  F fuzzy")
+	shortcuts := StatusKeyStyle.Render("?help  q quit  Tab focus  a approve  c comment  E copy  W export  s split  t theme  v toggle all  b range  F fuzzy")
 	avail := max(0, m.width-lipgloss.Width(shortcuts))
 	pad := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", avail))
 	return StatusBarStyle.Width(m.width).Render(
@@ -601,7 +601,8 @@ func (m Model) renderHelpDrawer() string {
 	c4 := col(21,
 		"c      Comment",
 		"d      Delete Comment",
-		"E      Export",
+		"E      Copy to Clipboard",
+		"W      Export to File",
 		"s      Split View",
 		"t      Theme Picker",
 	)

@@ -57,8 +57,9 @@ type FzfDoneMsg struct {
 }
 
 type ExportDoneMsg struct {
-	Path string
-	Err  error
+	Path      string
+	Clipboard bool
+	Err       error
 }
 
 type notifyClearMsg struct{}

@@ -107,6 +107,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ExportDoneMsg:
 		if msg.Err != nil {
 			m.statusNotify = "Export failed: " + msg.Err.Error()
+		} else if msg.Clipboard {
+			m.statusNotify = "Copied to clipboard"
 		} else {
 			m.statusNotify = "Exported to " + msg.Path
 		}
@@ -538,7 +540,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// === Export ===
 		case "E":
-			cmds = append(cmds, m.exportCmd())
+			cmds = append(cmds, m.copyClipboardCmd())
+		case "W":
+			cmds = append(cmds, m.exportFileCmd())
 
 		// === Side-by-side view ===
 		case "s":
@@ -994,7 +998,23 @@ func execFzfCmd(inputPath, outputPath string) tea.Cmd {
 
 // === Export command ===
 
-func (m Model) exportCmd() tea.Cmd {
+func (m Model) copyClipboardCmd() tea.Cmd {
+	return func() tea.Msg {
+		if len(m.reviewState.Comments) == 0 {
+			return ExportDoneMsg{Err: fmt.Errorf("no comments to export")}
+		}
+
+		content := review.ExportMarkdown(m.reviewState, m.rangeLabel)
+
+		if err := review.CopyToClipboard(content); err != nil {
+			return ExportDoneMsg{Err: err}
+		}
+
+		return ExportDoneMsg{Clipboard: true}
+	}
+}
+
+func (m Model) exportFileCmd() tea.Cmd {
 	return func() tea.Msg {
 		if len(m.reviewState.Comments) == 0 {
 			return ExportDoneMsg{Err: fmt.Errorf("no comments to export")}
@@ -1006,9 +1026,6 @@ func (m Model) exportCmd() tea.Cmd {
 		if err := os.WriteFile(outPath, []byte(content), 0644); err != nil {
 			return ExportDoneMsg{Err: err}
 		}
-
-		// Try clipboard too (best-effort)
-		_ = review.CopyToClipboard(content)
 
 		return ExportDoneMsg{Path: outPath}
 	}
