@@ -11,8 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// ansiRe matches ANSI escape sequences (colors, cursor movement, etc.)
-var ansiRe = regexp.MustCompile(`[][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PRZcf-ntqry=><~]))`)
+// ansiRe matches ANSI escape sequences (colors, cursor movement, etc.). The
+// leading escape-char anchor is essential: without it the pattern matches bare
+// digits/letters anywhere in a string and strips them.
+var ansiRe = regexp.MustCompile("[\\x{1b}\\x{9b}][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\\x{07})|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
 
 // hunkHeaderRe matches unified diff hunk headers and captures the new-file start line.
 var hunkHeaderRe = regexp.MustCompile(`^@@ \-\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
